@@ -80,31 +80,35 @@
         <table class="data-grid">
             <thead>
                 <tr>
+                    <th>Deployment ID</th>
                     <th>Version</th>
                     <th>Status</th>
                     <th>Stage</th>
                     <th>Started</th>
+                    <th>Finished</th>
                     <th>Message</th>
                     <th>Rollback</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var item in _history.OrderByDescending(x => x.StartedAtUtc))
+                @foreach (var item in OrderedHistory)
                 {
-                    <tr>
+                    <tr class="@(IsLatest(item) ? "latest-deployment" : null)">
+                        <td>@item.DeploymentId</td>
                         <td>@item.Version</td>
                         <td>@item.Status</td>
                         <td>@item.Stage</td>
                         <td>@item.StartedAtUtc.ToLocalTime()</td>
+                        <td>@(item.FinishedAtUtc?.ToLocalTime().ToString() ?? "-")</td>
                         <td>@(string.IsNullOrWhiteSpace(item.Message) ? "-" : item.Message)</td>
                         <td>
-                            @if (item.Status == DeploymentStatus.Succeeded && !item.IsRollback)
+                            @if (CanRollback(item))
                             {
                                 <button @onclick="() => RollbackAsync(item.DeploymentId)">Rollback</button>
                             }
                             else
                             {
-                                <span>-</span>
+                                <button disabled>Rollback</button>
                             }
                         </td>
                     </tr>
@@ -121,6 +125,8 @@
     private List<DeploymentHistoryItem> _history = [];
     private DeploymentResult? _deploymentResult;
     private string _message = string.Empty;
+    private IReadOnlyList<DeploymentHistoryItem> OrderedHistory
+        => _history.OrderByDescending(x => x.StartedAtUtc).ToList();
 
     private async Task SearchAsync()
     {
@@ -176,5 +182,16 @@
         }
 
         _history = (await DeploymentHistoryStore.GetByAppAsync(_deployment.AppName)).ToList();
+    }
+
+    private bool IsLatest(DeploymentHistoryItem item)
+        => OrderedHistory.Count > 0 && string.Equals(OrderedHistory[0].DeploymentId, item.DeploymentId, StringComparison.OrdinalIgnoreCase);
+
+    private bool CanRollback(DeploymentHistoryItem item)
+    {
+        return item.Status == DeploymentStatus.Succeeded
+            && !item.IsRollback
+            && !string.IsNullOrWhiteSpace(item.BackupPath)
+            && !IsLatest(item);
     }
 }

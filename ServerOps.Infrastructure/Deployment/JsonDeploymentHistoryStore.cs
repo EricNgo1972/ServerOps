@@ -11,6 +11,7 @@ public sealed class JsonDeploymentHistoryStore : IDeploymentHistoryStore
     {
         WriteIndented = true
     };
+    private static readonly SemaphoreSlim AppendLock = new(1, 1);
 
     private readonly IFileSystem _fileSystem;
     private readonly IRuntimeEnvironment _runtimeEnvironment;
@@ -51,13 +52,21 @@ public sealed class JsonDeploymentHistoryStore : IDeploymentHistoryStore
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        var path = GetHistoryPath(item.AppName);
-        var items = (await GetByAppAsync(item.AppName, ct)).ToList();
-        items.Add(item);
+        await AppendLock.WaitAsync(ct);
+        try
+        {
+            var path = GetHistoryPath(item.AppName);
+            var items = (await GetByAppAsync(item.AppName, ct)).ToList();
+            items.Add(item);
 
-        _fileSystem.CreateDirectory(GetHistoryDirectory());
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(items, JsonOptions));
-        await _fileSystem.WriteAllBytesAsync(path, bytes, ct);
+            _fileSystem.CreateDirectory(GetHistoryDirectory());
+            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(items, JsonOptions));
+            await _fileSystem.WriteAllBytesAsync(path, bytes, ct);
+        }
+        finally
+        {
+            AppendLock.Release();
+        }
     }
 
     private async Task InitializeFileAsync(string path, CancellationToken ct)
