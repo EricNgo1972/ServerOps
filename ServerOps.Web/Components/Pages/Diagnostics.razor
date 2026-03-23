@@ -1,5 +1,6 @@
 @page "/diagnostics"
 @inject IHostService HostService
+@inject IPortService PortService
 @inject IServiceControlService ServiceControlService
 
 <PageTitle>Host Diagnostics</PageTitle>
@@ -45,9 +46,38 @@ else
     </table>
 }
 
+@if (_ports.Count == 0)
+{
+    <p>No listening TCP ports discovered.</p>
+}
+else
+{
+    <h2>Listening Ports</h2>
+    <table class="data-grid">
+        <thead>
+            <tr>
+                <th>Port</th>
+                <th>PID</th>
+                <th>Process/Service</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var port in _ports)
+            {
+                <tr>
+                    <td>@port.Port</td>
+                    <td>@(port.ProcessId?.ToString() ?? "-")</td>
+                    <td>@(string.IsNullOrWhiteSpace(port.ProcessName) ? "-" : port.ProcessName)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
 @code {
     private OsType _currentOs;
     private List<ServiceInfo> _services = [];
+    private List<PortInfo> _ports = [];
     private string _message = string.Empty;
 
     protected override async Task OnInitializedAsync()
@@ -59,6 +89,7 @@ else
     {
         _currentOs = HostService.GetCurrentOs();
         _services = (await HostService.GetServicesAsync()).ToList();
+        _ports = (await PortService.GetListeningPortsAsync()).OrderBy(x => x.Port).ToList();
     }
 
     private async Task RunActionAsync(string serviceName, Func<string, CancellationToken, Task<CommandResult>> action)
