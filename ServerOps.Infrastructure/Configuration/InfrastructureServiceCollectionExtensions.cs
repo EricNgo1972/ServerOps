@@ -40,7 +40,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
         services.AddSingleton<IDeploymentPackageValidator, DeploymentPackageValidator>();
         services.AddSingleton<IHealthVerificationService, HealthVerificationService>();
+        services.AddSingleton<IDeploymentHistoryStore, JsonDeploymentHistoryStore>();
         services.AddSingleton<IDeploymentService, DeploymentService>();
+        services.AddSingleton<IRollbackService, RollbackService>();
         services.AddSingleton<AzureTableAppRegistry>();
         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();

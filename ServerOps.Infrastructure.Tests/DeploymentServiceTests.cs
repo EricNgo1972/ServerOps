@@ -120,7 +120,7 @@ public sealed class DeploymentServiceTests
             new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
             control,
             new FakeDeploymentPackageValidator(true),
-            new FakeHealthVerificationService(false),
+            new FakeHealthVerificationService([false, false, false, false, false, false, false, false, false, false, true]),
             new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
 
         var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
@@ -185,7 +185,8 @@ public sealed class DeploymentServiceTests
             new FakeRuntimeEnvironment(),
             packageValidator,
             healthVerificationService,
-            appTopologyService);
+            appTopologyService,
+            new FakeDeploymentHistoryStore());
     }
 
     private sealed class FakeHttpClientFactory : IHttpClientFactory
@@ -299,15 +300,23 @@ public sealed class DeploymentServiceTests
 
     private sealed class FakeHealthVerificationService : IHealthVerificationService
     {
-        private readonly bool _isHealthy;
+        private readonly Queue<bool> _values = new();
 
         public FakeHealthVerificationService(bool isHealthy)
         {
-            _isHealthy = isHealthy;
+            _values.Enqueue(isHealthy);
+        }
+
+        public FakeHealthVerificationService(IEnumerable<bool> values)
+        {
+            foreach (var value in values)
+            {
+                _values.Enqueue(value);
+            }
         }
 
         public Task<bool> VerifyAsync(string appName, CancellationToken ct = default)
-            => Task.FromResult(_isHealthy);
+            => Task.FromResult(_values.Count > 1 ? _values.Dequeue() : _values.Peek());
     }
 
     private sealed class FakeAppTopologyService : IAppTopologyService
@@ -321,6 +330,20 @@ public sealed class DeploymentServiceTests
 
         public Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default)
             => Task.FromResult(_topology);
+    }
+
+    private sealed class FakeDeploymentHistoryStore : IDeploymentHistoryStore
+    {
+        public List<DeploymentHistoryItem> Items { get; } = [];
+
+        public Task<IReadOnlyList<DeploymentHistoryItem>> GetByAppAsync(string appName, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<DeploymentHistoryItem>>(Items.Where(x => x.AppName == appName).ToList());
+
+        public Task AppendAsync(DeploymentHistoryItem item, CancellationToken ct = default)
+        {
+            Items.Add(item);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeFileSystem : IFileSystem

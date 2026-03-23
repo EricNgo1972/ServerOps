@@ -14,6 +14,7 @@ public sealed class DeploymentService : IDeploymentService
     private readonly IDeploymentPackageValidator _deploymentPackageValidator;
     private readonly IHealthVerificationService _healthVerificationService;
     private readonly IAppTopologyService _appTopologyService;
+    private readonly IDeploymentHistoryStore _deploymentHistoryStore;
 
     public DeploymentService(
         IHttpClientFactory httpClientFactory,
@@ -23,7 +24,8 @@ public sealed class DeploymentService : IDeploymentService
         IRuntimeEnvironment runtimeEnvironment,
         IDeploymentPackageValidator deploymentPackageValidator,
         IHealthVerificationService healthVerificationService,
-        IAppTopologyService appTopologyService)
+        IAppTopologyService appTopologyService,
+        IDeploymentHistoryStore deploymentHistoryStore)
     {
         _httpClient = httpClientFactory.CreateClient();
         _fileSystem = fileSystem;
@@ -33,6 +35,7 @@ public sealed class DeploymentService : IDeploymentService
         _deploymentPackageValidator = deploymentPackageValidator;
         _healthVerificationService = healthVerificationService;
         _appTopologyService = appTopologyService;
+        _deploymentHistoryStore = deploymentHistoryStore;
     }
 
     public async Task<DeploymentResult> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default)
@@ -43,7 +46,7 @@ public sealed class DeploymentService : IDeploymentService
 
         if (string.IsNullOrWhiteSpace(appName))
         {
-            return CreateResult(
+            return await FinalizeResultAsync(CreateResult(
                 deploymentId,
                 appName,
                 version,
@@ -51,12 +54,12 @@ public sealed class DeploymentService : IDeploymentService
                 DeploymentStage.Failed,
                 "Application name is required.",
                 startedAtUtc,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow), null, cancellationToken);
         }
 
         if (string.IsNullOrWhiteSpace(assetUrl))
         {
-            return CreateResult(
+            return await FinalizeResultAsync(CreateResult(
                 deploymentId,
                 appName,
                 version,
@@ -64,7 +67,7 @@ public sealed class DeploymentService : IDeploymentService
                 DeploymentStage.Failed,
                 "Asset URL is required.",
                 startedAtUtc,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow), null, cancellationToken);
         }
 
         var tempFolder = _fileSystem.Combine(_fileSystem.GetTempPath(), "serverops", deploymentId);
@@ -81,7 +84,7 @@ public sealed class DeploymentService : IDeploymentService
             _fileSystem.CreateDirectory(tempFolder);
             _fileSystem.CreateDirectory(appRoot);
 
-            var bytes = await DownloadAsync(assetUrl, cancellationToken);
+            var bytes = await _httpClient.GetByteArrayAsync(assetUrl, cancellationToken);
             await _fileSystem.WriteAllBytesAsync(zipPath, bytes, cancellationToken);
 
             if (_fileSystem.DirectoryExists(stagingPath))
@@ -95,7 +98,7 @@ public sealed class DeploymentService : IDeploymentService
             var packageIsValid = await _deploymentPackageValidator.IsValidAsync(stagingPath, cancellationToken);
             if (!packageIsValid)
             {
-                return CreateResult(
+                return await FinalizeResultAsync(CreateResult(
                     deploymentId,
                     appName,
                     version,
@@ -103,14 +106,14 @@ public sealed class DeploymentService : IDeploymentService
                     DeploymentStage.ValidatingPackage,
                     "Deployment package validation failed.",
                     startedAtUtc,
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow), null, cancellationToken);
             }
 
             var rollbackAvailable = false;
             var stopResult = await _serviceControlService.StopAsync(appName, cancellationToken);
             if (!stopResult.Succeeded)
             {
-                return CreateResult(
+                return await FinalizeResultAsync(CreateResult(
                     deploymentId,
                     appName,
                     version,
@@ -118,7 +121,7 @@ public sealed class DeploymentService : IDeploymentService
                     DeploymentStage.StoppingService,
                     GetCommandMessage("Failed to stop service.", stopResult),
                     startedAtUtc,
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow), null, cancellationToken);
             }
 
             try
@@ -146,7 +149,7 @@ public sealed class DeploymentService : IDeploymentService
             {
                 if (rollbackAvailable)
                 {
-                    return await RollbackAsync(
+                    return await RollbackInternalAsync(
                         deploymentId,
                         appName,
                         version,
@@ -158,7 +161,7 @@ public sealed class DeploymentService : IDeploymentService
                         cancellationToken);
                 }
 
-                return CreateResult(
+                return await FinalizeResultAsync(CreateResult(
                     deploymentId,
                     appName,
                     version,
@@ -166,13 +169,13 @@ public sealed class DeploymentService : IDeploymentService
                     DeploymentStage.ActivatingNewVersion,
                     ex.Message,
                     startedAtUtc,
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow), null, cancellationToken);
             }
 
             var startResult = await _serviceControlService.StartAsync(appName, cancellationToken);
             if (!startResult.Succeeded)
             {
-                return await RollbackAsync(
+                return await RollbackInternalAsync(
                     deploymentId,
                     appName,
                     version,
@@ -187,7 +190,7 @@ public sealed class DeploymentService : IDeploymentService
             var deploymentVerified = await VerifyDeploymentWithRetryAsync(appName, cancellationToken);
             if (!deploymentVerified)
             {
-                return await RollbackAsync(
+                return await RollbackInternalAsync(
                     deploymentId,
                     appName,
                     version,
@@ -201,7 +204,7 @@ public sealed class DeploymentService : IDeploymentService
 
             CleanupOldBackups(appRoot);
 
-            return CreateResult(
+            return await FinalizeResultAsync(CreateResult(
                 deploymentId,
                 appName,
                 version,
@@ -209,11 +212,11 @@ public sealed class DeploymentService : IDeploymentService
                 DeploymentStage.Completed,
                 "Deployment completed successfully.",
                 startedAtUtc,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow), rollbackAvailable ? backupPath : null, cancellationToken);
         }
         catch (Exception ex)
         {
-            return CreateResult(
+            return await FinalizeResultAsync(CreateResult(
                 deploymentId,
                 appName,
                 version,
@@ -221,29 +224,20 @@ public sealed class DeploymentService : IDeploymentService
                 DeploymentStage.Failed,
                 ex.Message,
                 startedAtUtc,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow), hadCurrent ? backupPath : null, cancellationToken);
         }
-    }
-
-    private async Task<byte[]> DownloadAsync(string assetUrl, CancellationToken cancellationToken)
-    {
-        return await _httpClient.GetByteArrayAsync(assetUrl, cancellationToken);
-    }
-
-    private async Task<bool> VerifyServiceAsync(string appName, CancellationToken cancellationToken)
-    {
-        var topology = await _appTopologyService.GetTopologyAsync(cancellationToken);
-        return topology.Any(item =>
-            string.Equals(item.ServiceName, appName, StringComparison.OrdinalIgnoreCase) &&
-            item.Status == ServiceStatus.Running &&
-            item.Ports.Count > 0);
     }
 
     private async Task<bool> VerifyDeploymentWithRetryAsync(string appName, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 10; attempt++)
         {
-            var serviceVerified = await VerifyServiceAsync(appName, cancellationToken);
+            var topology = await _appTopologyService.GetTopologyAsync(cancellationToken);
+            var serviceVerified = topology.Any(item =>
+                string.Equals(item.ServiceName, appName, StringComparison.OrdinalIgnoreCase) &&
+                item.Status == ServiceStatus.Running &&
+                item.Ports.Count > 0);
+
             var healthVerified = serviceVerified && await _healthVerificationService.VerifyAsync(appName, cancellationToken);
             if (healthVerified)
             {
@@ -259,7 +253,7 @@ public sealed class DeploymentService : IDeploymentService
         return false;
     }
 
-    private async Task<DeploymentResult> RollbackAsync(
+    private async Task<DeploymentResult> RollbackInternalAsync(
         string deploymentId,
         string appName,
         string version,
@@ -272,7 +266,7 @@ public sealed class DeploymentService : IDeploymentService
     {
         if (!hasBackup || !_fileSystem.DirectoryExists(backupPath))
         {
-            return CreateResult(
+            return await FinalizeResultAsync(CreateResult(
                 deploymentId,
                 appName,
                 version,
@@ -280,7 +274,7 @@ public sealed class DeploymentService : IDeploymentService
                 DeploymentStage.Failed,
                 $"{message} Rollback failed because no backup is available.",
                 startedAtUtc,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow), null, cancellationToken);
         }
 
         try
@@ -295,7 +289,7 @@ public sealed class DeploymentService : IDeploymentService
             var restartResult = await _serviceControlService.StartAsync(appName, cancellationToken);
             if (!restartResult.Succeeded)
             {
-                return CreateResult(
+                return await FinalizeResultAsync(CreateResult(
                     deploymentId,
                     appName,
                     version,
@@ -303,13 +297,13 @@ public sealed class DeploymentService : IDeploymentService
                     DeploymentStage.Failed,
                     $"{message} Rollback restart failed. {GetCommandMessage("Service start failed.", restartResult)}",
                     startedAtUtc,
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow), backupPath, cancellationToken);
             }
 
             var deploymentVerified = await VerifyDeploymentWithRetryAsync(appName, cancellationToken);
             if (!deploymentVerified)
             {
-                return CreateResult(
+                return await FinalizeResultAsync(CreateResult(
                     deploymentId,
                     appName,
                     version,
@@ -317,10 +311,10 @@ public sealed class DeploymentService : IDeploymentService
                     DeploymentStage.Failed,
                     "Rollback failed - manual intervention required",
                     startedAtUtc,
-                    DateTimeOffset.UtcNow);
+                    DateTimeOffset.UtcNow), backupPath, cancellationToken);
             }
 
-            return CreateResult(
+            return await FinalizeResultAsync(CreateResult(
                 deploymentId,
                 appName,
                 version,
@@ -328,11 +322,11 @@ public sealed class DeploymentService : IDeploymentService
                 DeploymentStage.RolledBack,
                 $"{message} Rollback completed successfully.",
                 startedAtUtc,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow), backupPath, cancellationToken);
         }
         catch (Exception ex)
         {
-            return CreateResult(
+            return await FinalizeResultAsync(CreateResult(
                 deploymentId,
                 appName,
                 version,
@@ -340,7 +334,7 @@ public sealed class DeploymentService : IDeploymentService
                 DeploymentStage.Failed,
                 $"{message} Rollback failed: {ex.Message}",
                 startedAtUtc,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow), backupPath, cancellationToken);
         }
     }
 
@@ -361,6 +355,27 @@ public sealed class DeploymentService : IDeploymentService
         {
             _fileSystem.DeleteDirectory(backupDirectory, recursive: true);
         }
+    }
+
+    private async Task<DeploymentResult> FinalizeResultAsync(
+        DeploymentResult result,
+        string? backupPath,
+        CancellationToken cancellationToken)
+    {
+        await _deploymentHistoryStore.AppendAsync(new DeploymentHistoryItem
+        {
+            DeploymentId = result.DeploymentId,
+            AppName = result.AppName,
+            Version = result.Version,
+            Status = result.Status,
+            Stage = result.Stage,
+            Message = result.Message,
+            StartedAtUtc = result.StartedAtUtc,
+            FinishedAtUtc = result.FinishedAtUtc,
+            BackupPath = string.IsNullOrWhiteSpace(backupPath) ? null : backupPath
+        }, cancellationToken);
+
+        return result;
     }
 
     private static DeploymentResult CreateResult(

@@ -1,6 +1,8 @@
 @page "/releases"
 @inject IGitHubService GitHubService
 @inject IDeploymentService DeploymentService
+@inject IDeploymentHistoryStore DeploymentHistoryStore
+@inject IRollbackService RollbackService
 
 <PageTitle>Releases</PageTitle>
 
@@ -71,16 +73,59 @@
     </article>
 }
 
+@if (_history.Count > 0)
+{
+    <article class="card">
+        <h2>Deployment History</h2>
+        <table class="data-grid">
+            <thead>
+                <tr>
+                    <th>Version</th>
+                    <th>Status</th>
+                    <th>Stage</th>
+                    <th>Started</th>
+                    <th>Message</th>
+                    <th>Rollback</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in _history.OrderByDescending(x => x.StartedAtUtc))
+                {
+                    <tr>
+                        <td>@item.Version</td>
+                        <td>@item.Status</td>
+                        <td>@item.Stage</td>
+                        <td>@item.StartedAtUtc.ToLocalTime()</td>
+                        <td>@(string.IsNullOrWhiteSpace(item.Message) ? "-" : item.Message)</td>
+                        <td>
+                            @if (item.Status == DeploymentStatus.Succeeded && !item.IsRollback)
+                            {
+                                <button @onclick="() => RollbackAsync(item.DeploymentId)">Rollback</button>
+                            }
+                            else
+                            {
+                                <span>-</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </article>
+}
+
 @code {
     private readonly ReleaseQueryDto _query = new();
     private readonly DeploymentRequestDto _deployment = new();
     private List<ReleaseInfo> _releases = [];
+    private List<DeploymentHistoryItem> _history = [];
     private DeploymentResult? _deploymentResult;
     private string _message = string.Empty;
 
     private async Task SearchAsync()
     {
         _releases = (await GitHubService.GetReleasesAsync(_query.Repo)).ToList();
+        await LoadHistoryAsync();
         _message = _releases.Count == 0 ? "No releases found." : string.Empty;
     }
 
@@ -94,6 +139,7 @@
 
         _deployment.AssetUrl = assetUrl;
         _deploymentResult = await DeploymentService.DeployAsync(_deployment.AppName, assetUrl);
+        await LoadHistoryAsync();
         _message = $"{_deploymentResult.AppName} deployment {_deploymentResult.Status} at {_deploymentResult.StartedAtUtc.LocalDateTime}.";
     }
 
@@ -106,5 +152,29 @@
         }
 
         await DeployAsync(_deployment.AssetUrl);
+    }
+
+    private async Task RollbackAsync(string deploymentId)
+    {
+        if (string.IsNullOrWhiteSpace(_deployment.AppName))
+        {
+            _message = "Application name is required.";
+            return;
+        }
+
+        _deploymentResult = await RollbackService.RollbackAsync(_deployment.AppName, deploymentId);
+        await LoadHistoryAsync();
+        _message = $"{_deploymentResult.AppName} rollback {_deploymentResult.Status} at {_deploymentResult.StartedAtUtc.LocalDateTime}.";
+    }
+
+    private async Task LoadHistoryAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_deployment.AppName))
+        {
+            _history = [];
+            return;
+        }
+
+        _history = (await DeploymentHistoryStore.GetByAppAsync(_deployment.AppName)).ToList();
     }
 }
