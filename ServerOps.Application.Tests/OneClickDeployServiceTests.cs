@@ -21,7 +21,8 @@ public sealed class OneClickDeployServiceTests
                 FinishedAtUtc = DateTimeOffset.UtcNow
             }),
             exposure,
-            new FakeDomainNameBuilder("phoebus.apps.local"));
+            new FakeDomainNameBuilder("phoebus.apps.local"),
+            new FakeOperationLogger());
 
         var result = await service.DeployAsync(new OneClickDeployRequest
         {
@@ -41,7 +42,8 @@ public sealed class OneClickDeployServiceTests
         var service = new OneClickDeployService(
             new FakeDeploymentService(SucceededDeployment()),
             exposure,
-            new FakeDomainNameBuilder("phoebus.apps.local"));
+            new FakeDomainNameBuilder("phoebus.apps.local"),
+            new FakeOperationLogger());
 
         var result = await service.DeployAsync(new OneClickDeployRequest
         {
@@ -61,7 +63,8 @@ public sealed class OneClickDeployServiceTests
         var service = new OneClickDeployService(
             new FakeDeploymentService(SucceededDeployment()),
             new FakeExposureService(throwOnExpose: true),
-            new FakeDomainNameBuilder("phoebus.apps.local"));
+            new FakeDomainNameBuilder("phoebus.apps.local"),
+            new FakeOperationLogger());
 
         var result = await service.DeployAsync(new OneClickDeployRequest
         {
@@ -81,7 +84,8 @@ public sealed class OneClickDeployServiceTests
         var service = new OneClickDeployService(
             new FakeDeploymentService(SucceededDeployment()),
             exposure,
-            new FakeDomainNameBuilder("generated.apps.local"));
+            new FakeDomainNameBuilder("generated.apps.local"),
+            new FakeOperationLogger());
 
         var result = await service.DeployAsync(new OneClickDeployRequest
         {
@@ -101,7 +105,8 @@ public sealed class OneClickDeployServiceTests
         var service = new OneClickDeployService(
             new FakeDeploymentService(SucceededDeployment()),
             exposure,
-            new FakeDomainNameBuilder("phoebus.apps.local"));
+            new FakeDomainNameBuilder("phoebus.apps.local"),
+            new FakeOperationLogger());
 
         var result = await service.DeployAsync(new OneClickDeployRequest
         {
@@ -181,5 +186,11 @@ public sealed class OneClickDeployServiceTests
         }
 
         public string Build(string appName) => _hostname;
+    }
+
+    private sealed class FakeOperationLogger : IOperationLogger
+    {
+        public Task LogAsync(string operationId, string stage, string message, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 }

@@ -186,7 +186,8 @@ public sealed class DeploymentServiceTests
             packageValidator,
             healthVerificationService,
             appTopologyService,
-            new FakeDeploymentHistoryStore());
+            new FakeDeploymentHistoryStore(),
+            new FakeOperationLogger());
     }
 
     private sealed class FakeHttpClientFactory : IHttpClientFactory
@@ -344,6 +345,12 @@ public sealed class DeploymentServiceTests
             Items.Add(item);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FakeOperationLogger : IOperationLogger
+    {
+        public Task LogAsync(string operationId, string stage, string message, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     private sealed class FakeFileSystem : IFileSystem

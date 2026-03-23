@@ -17,13 +17,12 @@ public sealed class DefaultDomainNameBuilder : IDomainNameBuilder
     public string Build(string appName)
     {
         var suffix = _domainOptions.Value.DefaultDomainSuffix?.Trim().ToLowerInvariant() ?? string.Empty;
-        var sanitizedAppName = Sanitize(appName);
-
         if (string.IsNullOrWhiteSpace(suffix))
         {
-            return sanitizedAppName;
+            throw new InvalidOperationException("Domain default suffix is required.");
         }
 
+        var sanitizedAppName = Sanitize(appName);
         return $"{sanitizedAppName}.{suffix}";
     }
 

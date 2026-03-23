@@ -39,6 +39,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IPortService, PortService>();
         services.AddSingleton<ICloudflaredService, CloudflaredService>();
         services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
+        services.AddSingleton<IOperationLogger, FileOperationLogger>();
+        services.AddSingleton<ILogService, FileLogService>();
         services.AddSingleton<IDeploymentPackageValidator, DeploymentPackageValidator>();
         services.AddSingleton<IHealthVerificationService, HealthVerificationService>();
         services.AddSingleton<IDeploymentHistoryStore, JsonDeploymentHistoryStore>();

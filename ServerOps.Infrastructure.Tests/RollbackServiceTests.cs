@@ -135,7 +135,8 @@ public sealed class RollbackServiceTests
             fileSystem,
             new FakeRuntimeEnvironment(),
             healthVerificationService,
-            topologyService);
+            topologyService,
+            new FakeOperationLogger());
     }
 
     private sealed class FakeRuntimeEnvironment : IRuntimeEnvironment
@@ -285,5 +286,11 @@ public sealed class RollbackServiceTests
                 _directories.Add(current);
             }
         }
+    }
+
+    private sealed class FakeOperationLogger : IOperationLogger
+    {
+        public Task LogAsync(string operationId, string stage, string message, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 }

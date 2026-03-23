@@ -1,0 +1,13 @@
+[Unit]
+Description=ServerOps Web
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/serverops
+ExecStart=/usr/bin/dotnet /opt/serverops/ServerOps.Web.dll
+Restart=always
+RestartSec=5
+Environment=ASPNETCORE_ENVIRONMENT=Production
+
+[Install]
+WantedBy=multi-user.target

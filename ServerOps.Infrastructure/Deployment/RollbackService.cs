@@ -12,6 +12,7 @@ public sealed class RollbackService : IRollbackService
     private readonly IRuntimeEnvironment _runtimeEnvironment;
     private readonly IHealthVerificationService _healthVerificationService;
     private readonly IAppTopologyService _appTopologyService;
+    private readonly IOperationLogger _operationLogger;
 
     public RollbackService(
         IDeploymentHistoryStore deploymentHistoryStore,
@@ -19,7 +20,8 @@ public sealed class RollbackService : IRollbackService
         IFileSystem fileSystem,
         IRuntimeEnvironment runtimeEnvironment,
         IHealthVerificationService healthVerificationService,
-        IAppTopologyService appTopologyService)
+        IAppTopologyService appTopologyService,
+        IOperationLogger operationLogger)
     {
         _deploymentHistoryStore = deploymentHistoryStore;
         _serviceControlService = serviceControlService;
@@ -27,6 +29,7 @@ public sealed class RollbackService : IRollbackService
         _runtimeEnvironment = runtimeEnvironment;
         _healthVerificationService = healthVerificationService;
         _appTopologyService = appTopologyService;
+        _operationLogger = operationLogger;
     }
 
     public async Task<DeploymentResult> RollbackAsync(string appName, string deploymentId, CancellationToken ct = default)
@@ -73,6 +76,7 @@ public sealed class RollbackService : IRollbackService
 
         try
         {
+            await _operationLogger.LogAsync(deploymentId, "Rollback", "Started", ct);
             var stopResult = await _serviceControlService.StopAsync(appName, ct);
             if (!stopResult.Succeeded)
             {
@@ -96,14 +100,17 @@ public sealed class RollbackService : IRollbackService
             }
 
             _fileSystem.CopyDirectory(target.BackupPath, currentPath, overwrite: true);
+            await _operationLogger.LogAsync(deploymentId, "Rollback", "RestoreBackup", ct);
 
             var startResult = await _serviceControlService.StartAsync(appName, ct);
+            await _operationLogger.LogAsync(deploymentId, "Rollback", "Restart", ct);
             if (!startResult.Succeeded)
             {
                 return await RecoverFailedRollbackAsync(appName, target, deploymentId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);
             }
 
             var verified = await VerifyDeploymentWithRetryAsync(appName, ct);
+            await _operationLogger.LogAsync(deploymentId, "Rollback", verified ? "VerifySucceeded" : "VerifyFailed", ct);
             if (!verified)
             {
                 return await RecoverFailedRollbackAsync(appName, target, deploymentId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);

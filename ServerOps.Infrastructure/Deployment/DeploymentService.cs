@@ -15,6 +15,7 @@ public sealed class DeploymentService : IDeploymentService
     private readonly IHealthVerificationService _healthVerificationService;
     private readonly IAppTopologyService _appTopologyService;
     private readonly IDeploymentHistoryStore _deploymentHistoryStore;
+    private readonly IOperationLogger _operationLogger;
 
     public DeploymentService(
         IHttpClientFactory httpClientFactory,
@@ -25,7 +26,8 @@ public sealed class DeploymentService : IDeploymentService
         IDeploymentPackageValidator deploymentPackageValidator,
         IHealthVerificationService healthVerificationService,
         IAppTopologyService appTopologyService,
-        IDeploymentHistoryStore deploymentHistoryStore)
+        IDeploymentHistoryStore deploymentHistoryStore,
+        IOperationLogger operationLogger)
     {
         _httpClient = httpClientFactory.CreateClient();
         _fileSystem = fileSystem;
@@ -36,6 +38,7 @@ public sealed class DeploymentService : IDeploymentService
         _healthVerificationService = healthVerificationService;
         _appTopologyService = appTopologyService;
         _deploymentHistoryStore = deploymentHistoryStore;
+        _operationLogger = operationLogger;
     }
 
     public async Task<DeploymentResult> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default)
@@ -84,8 +87,10 @@ public sealed class DeploymentService : IDeploymentService
             _fileSystem.CreateDirectory(tempFolder);
             _fileSystem.CreateDirectory(appRoot);
 
+            await _operationLogger.LogAsync(deploymentId, "Download", "Started", cancellationToken);
             var bytes = await _httpClient.GetByteArrayAsync(assetUrl, cancellationToken);
             await _fileSystem.WriteAllBytesAsync(zipPath, bytes, cancellationToken);
+            await _operationLogger.LogAsync(deploymentId, "Download", "Completed", cancellationToken);
 
             if (_fileSystem.DirectoryExists(stagingPath))
             {
@@ -93,7 +98,9 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             _fileSystem.CreateDirectory(stagingPath);
+            await _operationLogger.LogAsync(deploymentId, "Extract", "Started", cancellationToken);
             await _archiveService.ExtractZipAsync(zipPath, stagingPath, cancellationToken);
+            await _operationLogger.LogAsync(deploymentId, "Extract", "Completed", cancellationToken);
 
             var packageIsValid = await _deploymentPackageValidator.IsValidAsync(stagingPath, cancellationToken);
             if (!packageIsValid)
@@ -135,6 +142,7 @@ public sealed class DeploymentService : IDeploymentService
 
                     _fileSystem.MoveDirectory(currentPath, backupPath);
                     rollbackAvailable = true;
+                    await _operationLogger.LogAsync(deploymentId, "Backup", "Completed", cancellationToken);
                 }
 
                 if (_fileSystem.DirectoryExists(currentTempPath))
@@ -144,6 +152,7 @@ public sealed class DeploymentService : IDeploymentService
 
                 _fileSystem.MoveDirectory(stagingPath, currentTempPath);
                 _fileSystem.MoveDirectory(currentTempPath, currentPath);
+                await _operationLogger.LogAsync(deploymentId, "Swap", "Completed", cancellationToken);
             }
             catch (Exception ex)
             {
@@ -173,6 +182,7 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             var startResult = await _serviceControlService.StartAsync(appName, cancellationToken);
+            await _operationLogger.LogAsync(deploymentId, "StartService", startResult.Succeeded ? "Completed" : "Failed", cancellationToken);
             if (!startResult.Succeeded)
             {
                 return await RollbackInternalAsync(
@@ -188,6 +198,7 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             var deploymentVerified = await VerifyDeploymentWithRetryAsync(appName, cancellationToken);
+            await _operationLogger.LogAsync(deploymentId, "Verify", deploymentVerified ? "Completed" : "Failed", cancellationToken);
             if (!deploymentVerified)
             {
                 return await RollbackInternalAsync(
@@ -203,6 +214,7 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             CleanupOldBackups(appRoot);
+            await _operationLogger.LogAsync(deploymentId, "Cleanup", "Completed", cancellationToken);
 
             return await FinalizeResultAsync(CreateResult(
                 deploymentId,
@@ -285,6 +297,7 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             _fileSystem.MoveDirectory(backupPath, currentPath);
+            await _operationLogger.LogAsync(deploymentId, "Rollback", "RestoreBackup", cancellationToken);
 
             var restartResult = await _serviceControlService.StartAsync(appName, cancellationToken);
             if (!restartResult.Succeeded)

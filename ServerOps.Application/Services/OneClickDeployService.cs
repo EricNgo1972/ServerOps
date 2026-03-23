@@ -9,15 +9,18 @@ public sealed class OneClickDeployService : IOneClickDeployService
     private readonly IDeploymentService _deploymentService;
     private readonly IExposureService _exposureService;
     private readonly IDomainNameBuilder _domainNameBuilder;
+    private readonly IOperationLogger _operationLogger;
 
     public OneClickDeployService(
         IDeploymentService deploymentService,
         IExposureService exposureService,
-        IDomainNameBuilder domainNameBuilder)
+        IDomainNameBuilder domainNameBuilder,
+        IOperationLogger operationLogger)
     {
         _deploymentService = deploymentService;
         _exposureService = exposureService;
         _domainNameBuilder = domainNameBuilder;
+        _operationLogger = operationLogger;
     }
 
     public async Task<OneClickDeployResult> DeployAsync(OneClickDeployRequest request, CancellationToken ct = default)
@@ -34,6 +37,9 @@ public sealed class OneClickDeployService : IOneClickDeployService
             return CreateFailureResult("Asset URL is required.");
         }
 
+        var operationId = Guid.NewGuid().ToString("N");
+        await _operationLogger.LogAsync(operationId, "OneClick", "Started", ct);
+
         var hostname = !string.IsNullOrWhiteSpace(request.Hostname)
             ? request.Hostname.Trim()
             : request.AutoGenerateHostname
@@ -41,6 +47,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
                 : null;
 
         var deployment = await _deploymentService.DeployAsync(request.AppName, request.AssetUrl, ct);
+        await _operationLogger.LogAsync(operationId, "Deployment", deployment.Status.ToString(), ct);
         if (deployment.Status != DeploymentStatus.Succeeded)
         {
             return new OneClickDeployResult
@@ -66,6 +73,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
         try
         {
             await _exposureService.ExposeAsync(request.AppName, hostname, ct);
+            await _operationLogger.LogAsync(operationId, "Exposure", "Succeeded", ct);
 
             return new OneClickDeployResult
             {
@@ -78,13 +86,16 @@ public sealed class OneClickDeployService : IOneClickDeployService
         }
         catch (Exception ex)
         {
+            await _operationLogger.LogAsync(operationId, "Exposure", "Failed", ct);
             return new OneClickDeployResult
             {
                 Deployment = deployment,
                 Hostname = hostname,
                 PublicUrl = $"https://{hostname}",
                 Exposed = false,
-                Message = $"Deployment succeeded, but exposure failed: {ex.Message}"
+                Message = string.IsNullOrWhiteSpace(ex.Message)
+                    ? "Deployment succeeded but exposure failed"
+                    : $"Deployment succeeded but exposure failed: {ex.Message}"
             };
         }
     }

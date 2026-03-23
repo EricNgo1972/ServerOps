@@ -1,4 +1,5 @@
 using ServerOps.Infrastructure.Configuration;
+using ServerOps.Web.Api;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,6 +17,8 @@ if (!app.Environment.IsDevelopment())
 
 app.UseStaticFiles();
 app.UseAntiforgery();
+
+app.MapPost("/api/deploy", DeployApiEndpoint.HandleAsync);
 
 app.MapRazorComponents<ServerOps.Web.Components.App>()
     .AddInteractiveServerRenderMode();

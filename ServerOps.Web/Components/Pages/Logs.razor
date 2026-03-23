@@ -1,0 +1,47 @@
+@page "/logs/{OperationId}"
+@inject ILogService LogService
+
+<PageTitle>Logs</PageTitle>
+
+<h1>Operation Logs</h1>
+
+<p>Operation ID: @OperationId</p>
+<button @onclick="RefreshAsync">Refresh</button>
+
+@if (!_exists)
+{
+    <p>No log file found.</p>
+}
+else
+{
+    <div style="height:500px; overflow:auto; background:#111827; color:#e5e7eb; padding:1rem; font-family:Consolas, 'Courier New', monospace; white-space:pre-wrap; border-radius:8px; margin-top:1rem;">
+        @foreach (var line in _lines)
+        {
+            <div>@line</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter]
+    public string OperationId { get; set; } = string.Empty;
+
+    private List<string> _lines = [];
+    private bool _exists;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _exists = await LogService.ExistsAsync(OperationId);
+        _lines = (await LogService.GetLogLinesAsync(OperationId)).ToList();
+    }
+}

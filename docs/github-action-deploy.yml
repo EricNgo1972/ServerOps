@@ -1,0 +1,19 @@
+name: Manual Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ServerOps deploy API
+        run: |
+          curl -X POST "${{ secrets.SERVEROPS_URL }}/api/deploy" \
+            -H "Content-Type: application/json" \
+            -H "X-API-KEY: ${{ secrets.DEPLOY_KEY }}" \
+            -d '{
+              "appName": "phoebus-api",
+              "assetUrl": "https://github.com/example/repo/releases/download/v1.0.0/app.zip",
+              "hostname": "phoebus.apps.local"
+            }'

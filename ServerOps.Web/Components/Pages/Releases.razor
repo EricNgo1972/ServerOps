@@ -3,6 +3,7 @@
 @inject IOneClickDeployService OneClickDeployService
 @inject IDeploymentHistoryStore DeploymentHistoryStore
 @inject IRollbackService RollbackService
+@inject NavigationManager NavigationManager
 
 <PageTitle>Releases</PageTitle>
 
@@ -78,6 +79,10 @@
         <p>Hostname: @(_oneClickResult.Hostname ?? "-")</p>
         <p>Public URL: @(_oneClickResult.PublicUrl ?? "-")</p>
         <p>Exposure Status: @(_oneClickResult.Exposed ? "Exposed" : "Not Exposed")</p>
+        @if (_oneClickResult.Deployment.Status == DeploymentStatus.Succeeded && !_oneClickResult.Exposed)
+        {
+            <p class="message">Warning: exposure failed or was not configured.</p>
+        }
         <p>Message: @(string.IsNullOrWhiteSpace(_oneClickResult.Message) ? "-" : _oneClickResult.Message)</p>
     </article>
 }
@@ -96,6 +101,7 @@
                     <th>Started</th>
                     <th>Finished</th>
                     <th>Message</th>
+                    <th>Logs</th>
                     <th>Rollback</th>
                 </tr>
             </thead>
@@ -110,6 +116,9 @@
                         <td>@item.StartedAtUtc.ToLocalTime()</td>
                         <td>@(item.FinishedAtUtc?.ToLocalTime().ToString() ?? "-")</td>
                         <td>@(string.IsNullOrWhiteSpace(item.Message) ? "-" : item.Message)</td>
+                        <td>
+                            <button @onclick="() => OpenLogs(item.DeploymentId)">Logs</button>
+                        </td>
                         <td>
                             @if (CanRollback(item))
                             {
@@ -207,5 +216,15 @@
             && !item.IsRollback
             && !string.IsNullOrWhiteSpace(item.BackupPath)
             && !IsLatest(item);
+    }
+
+    private void OpenLogs(string deploymentId)
+    {
+        if (string.IsNullOrWhiteSpace(deploymentId))
+        {
+            return;
+        }
+
+        NavigationManager.NavigateTo($"/logs/{deploymentId}");
     }
 }
