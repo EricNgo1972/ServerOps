@@ -28,13 +28,14 @@ public sealed class EndpointService : IEndpointService
 
         var mappingByService = mappings
             .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ServiceName))
-            .ToDictionary(mapping => mapping.ServiceName, StringComparer.OrdinalIgnoreCase);
+            .ToDictionary(mapping => Normalize(mapping.ServiceName), StringComparer.OrdinalIgnoreCase);
 
         return topology
             .Select(service =>
             {
-                mappingByService.TryGetValue(service.ServiceName, out var mapping);
-                var port = service.Ports.FirstOrDefault();
+                var key = Normalize(service.ServiceName);
+                mappingByService.TryGetValue(key, out var mapping);
+                var port = service.Ports.Count > 0 ? service.Ports[0] : (int?)null;
                 var hostname = string.IsNullOrWhiteSpace(mapping?.Hostname) ? null : mapping.Hostname;
 
                 return new ServiceEndpoint
@@ -48,5 +49,13 @@ public sealed class EndpointService : IEndpointService
             })
             .OrderBy(endpoint => endpoint.ServiceName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static string Normalize(string name)
+    {
+        return name
+            .Replace(".service", "", StringComparison.OrdinalIgnoreCase)
+            .Trim()
+            .ToLowerInvariant();
     }
 }

@@ -68,6 +68,35 @@ public sealed class EndpointServiceTests
         Assert.False(endpoint.IsExposed);
     }
 
+    [Fact]
+    public async Task GetEndpointsAsync_Matches_Service_Name_Case_Insensitively_With_Service_Suffix()
+    {
+        var service = CreateService(
+            [new ServiceTopology { ServiceName = "phoebus-api.service", Ports = [5000] }],
+            [new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" }],
+            new TunnelInfo { IsRunning = true });
+
+        var endpoints = await service.GetEndpointsAsync();
+
+        var endpoint = Assert.Single(endpoints);
+        Assert.Equal("https://phoebus.local", endpoint.PublicUrl);
+        Assert.True(endpoint.IsExposed);
+    }
+
+    [Fact]
+    public async Task GetEndpointsAsync_Returns_Null_Port_When_Service_Has_No_Ports()
+    {
+        var service = CreateService(
+            [new ServiceTopology { ServiceName = "phoebus-api", Ports = [] }],
+            [new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" }],
+            new TunnelInfo { IsRunning = true });
+
+        var endpoints = await service.GetEndpointsAsync();
+
+        var endpoint = Assert.Single(endpoints);
+        Assert.Null(endpoint.Port);
+    }
+
     private static EndpointService CreateService(
         IReadOnlyList<ServiceTopology> topology,
         IReadOnlyList<EndpointMapping> mappings,
@@ -103,6 +132,12 @@ public sealed class EndpointServiceTests
 
         public Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default)
             => Task.FromResult(_mappings);
+
+        public Task UpsertAsync(string serviceName, string hostname, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task RemoveAsync(string serviceName, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     private sealed class FakeCloudflaredService : ICloudflaredService

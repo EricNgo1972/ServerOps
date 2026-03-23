@@ -37,6 +37,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IServiceControlService, ServiceControlService>();
         services.AddSingleton<IPortService, PortService>();
         services.AddSingleton<ICloudflaredService, CloudflaredService>();
+        services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
         services.AddSingleton<IDeploymentService, DeploymentService>();
         services.AddSingleton<AzureTableAppRegistry>();
         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
@@ -44,7 +45,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IAppTopologyService, AppTopologyService>();
         services.AddSingleton<IEndpointRegistry, InMemoryEndpointRegistry>();
         services.AddSingleton<IEndpointService, EndpointService>();
+        services.AddSingleton<IExposureService, ExposureService>();
         services.AddSingleton<IAppCatalogService, AppCatalogService>();
+        services.AddHttpClient<ICloudflareDnsService, CloudflareDnsService>();
 
         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
         {

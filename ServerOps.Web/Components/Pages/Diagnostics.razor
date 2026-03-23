@@ -3,6 +3,7 @@
 @inject IPortService PortService
 @inject IAppTopologyService AppTopologyService
 @inject IEndpointService EndpointService
+@inject IExposureService ExposureService
 @inject IServiceControlService ServiceControlService
 
 <PageTitle>Host Diagnostics</PageTitle>
@@ -29,6 +30,7 @@ else
                 <th>Name</th>
                 <th>Status</th>
                 <th>Actions</th>
+                <th>Expose</th>
             </tr>
         </thead>
         <tbody>
@@ -41,6 +43,12 @@ else
                         <button @onclick="() => RunActionAsync(service.Name, ServiceControlService.StartAsync)">Start</button>
                         <button @onclick="() => RunActionAsync(service.Name, ServiceControlService.StopAsync)">Stop</button>
                         <button @onclick="() => RunActionAsync(service.Name, ServiceControlService.RestartAsync)">Restart</button>
+                    </td>
+                    <td class="actions">
+                        <input value="@GetHostname(service.Name)" @oninput="e => SetHostname(service.Name, e.Value?.ToString())" />
+                        <button @onclick="() => ExposeAsync(service.Name)">Expose</button>
+                        <button @onclick="() => UpdateAsync(service.Name)">Update</button>
+                        <button @onclick="() => RemoveAsync(service.Name)">Remove</button>
                     </td>
                 </tr>
             }
@@ -127,7 +135,7 @@ else
             {
                 <tr>
                     <td>@endpoint.ServiceName</td>
-                    <td>@(endpoint.Port == 0 ? "-" : endpoint.Port)</td>
+                    <td>@(endpoint.Port?.ToString() ?? "-")</td>
                     <td>@(string.IsNullOrWhiteSpace(endpoint.PublicUrl) ? "-" : endpoint.PublicUrl)</td>
                     <td>@(endpoint.IsExposed ? "Exposed" : "Not Exposed")</td>
                 </tr>
@@ -142,6 +150,7 @@ else
     private List<PortInfo> _ports = [];
     private List<ServiceTopology> _topology = [];
     private List<ServiceEndpoint> _endpoints = [];
+    private Dictionary<string, string> _hostnames = new(StringComparer.OrdinalIgnoreCase);
     private string _message = string.Empty;
 
     protected override async Task OnInitializedAsync()
@@ -162,6 +171,59 @@ else
     {
         var result = await action(serviceName, CancellationToken.None);
         _message = $"ExitCode: {result.ExitCode} | StdOut: {result.StdOut} | StdErr: {result.StdErr}";
+        await LoadAsync();
+    }
+
+    private string GetHostname(string serviceName)
+        => _hostnames.TryGetValue(serviceName, out var hostname) ? hostname : string.Empty;
+
+    private void SetHostname(string serviceName, string? hostname)
+    {
+        _hostnames[serviceName] = hostname ?? string.Empty;
+    }
+
+    private async Task ExposeAsync(string serviceName)
+    {
+        try
+        {
+            await ExposureService.ExposeAsync(serviceName, GetHostname(serviceName), CancellationToken.None);
+            _message = $"Exposure configured for {serviceName}.";
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task UpdateAsync(string serviceName)
+    {
+        try
+        {
+            await ExposureService.UpdateAsync(serviceName, GetHostname(serviceName), CancellationToken.None);
+            _message = $"Exposure updated for {serviceName}.";
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task RemoveAsync(string serviceName)
+    {
+        try
+        {
+            await ExposureService.UnexposeAsync(serviceName, CancellationToken.None);
+            _message = $"Exposure removed for {serviceName}.";
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+        }
+
         await LoadAsync();
     }
 }
