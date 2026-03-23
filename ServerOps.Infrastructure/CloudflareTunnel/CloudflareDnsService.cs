@@ -16,7 +16,7 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
 
     public async Task EnsureCNameAsync(string hostname, string target, CancellationToken ct = default)
     {
-        if (await ExistsAsync(hostname, ct))
+        if (await ExistsAsync(hostname, target, ct))
         {
             return;
         }
@@ -42,6 +42,11 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
 
     public async Task<bool> ExistsAsync(string hostname, CancellationToken ct = default)
     {
+        return await ExistsAsync(hostname, null, ct);
+    }
+
+    private async Task<bool> ExistsAsync(string hostname, string? target, CancellationToken ct)
+    {
         var token = GetRequiredEnvironmentVariable("CLOUDFLARE_API_TOKEN");
         var zoneId = GetRequiredEnvironmentVariable("CLOUDFLARE_ZONE_ID");
 
@@ -61,7 +66,31 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
             return false;
         }
 
-        return result.GetArrayLength() > 0;
+        foreach (var item in result.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var recordName = item.TryGetProperty("name", out var nameProperty)
+                ? nameProperty.GetString()
+                : null;
+            var recordContent = item.TryGetProperty("content", out var contentProperty)
+                ? contentProperty.GetString()
+                : null;
+
+            var hostnameMatches = string.Equals(recordName, hostname, StringComparison.OrdinalIgnoreCase);
+            var targetMatches = string.IsNullOrWhiteSpace(target)
+                || string.Equals(recordContent, target, StringComparison.OrdinalIgnoreCase);
+
+            if (hostnameMatches && targetMatches)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public async Task DeleteAsync(string hostname, CancellationToken ct = default)

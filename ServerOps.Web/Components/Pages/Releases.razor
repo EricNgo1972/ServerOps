@@ -15,7 +15,12 @@
         <label for="app">Application Name</label>
         <InputText id="app" @bind-Value="_deployment.AppName" />
     </div>
+    <div class="form-row">
+        <label for="assetUrl">Asset URL</label>
+        <InputText id="assetUrl" @bind-Value="_deployment.AssetUrl" />
+    </div>
     <button type="submit">Load Releases</button>
+    <button type="button" @onclick="DeployFromInputAsync">Deploy</button>
 </EditForm>
 
 @if (!string.IsNullOrWhiteSpace(_message))
@@ -54,10 +59,23 @@
     </div>
 }
 
+@if (_deploymentResult is not null)
+{
+    <article class="card">
+        <h2>Deployment Result</h2>
+        <p>Status: @_deploymentResult.Status</p>
+        <p>Stage: @_deploymentResult.Stage</p>
+        <p>Message: @(string.IsNullOrWhiteSpace(_deploymentResult.Message) ? "-" : _deploymentResult.Message)</p>
+        <p>Started: @_deploymentResult.StartedAtUtc.ToLocalTime()</p>
+        <p>Finished: @(_deploymentResult.FinishedAtUtc?.ToLocalTime().ToString() ?? "-")</p>
+    </article>
+}
+
 @code {
     private readonly ReleaseQueryDto _query = new();
     private readonly DeploymentRequestDto _deployment = new();
     private List<ReleaseInfo> _releases = [];
+    private DeploymentResult? _deploymentResult;
     private string _message = string.Empty;
 
     private async Task SearchAsync()
@@ -74,7 +92,19 @@
             return;
         }
 
-        var record = await DeploymentService.DeployAsync(_deployment.AppName, assetUrl);
-        _message = $"{record.AppName} deployment {record.Status} at {record.Timestamp.LocalDateTime}.";
+        _deployment.AssetUrl = assetUrl;
+        _deploymentResult = await DeploymentService.DeployAsync(_deployment.AppName, assetUrl);
+        _message = $"{_deploymentResult.AppName} deployment {_deploymentResult.Status} at {_deploymentResult.StartedAtUtc.LocalDateTime}.";
+    }
+
+    private async Task DeployFromInputAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_deployment.AssetUrl))
+        {
+            _message = "Asset URL is required.";
+            return;
+        }
+
+        await DeployAsync(_deployment.AssetUrl);
     }
 }

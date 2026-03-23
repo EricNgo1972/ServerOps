@@ -1,8 +1,8 @@
-using ServerOps.Domain.Entities;
+using ServerOps.Application.DTOs;
 
 namespace ServerOps.Application.Abstractions;
 
 public interface IDeploymentService
 {
-    Task<DeploymentRecord> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default);
+    Task<DeploymentResult> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default);
 }

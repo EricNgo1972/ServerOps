@@ -48,21 +48,17 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
             return;
         }
 
-        const string fallbackLine = "- service: http_status:404";
-        var ingressBlock = $"- hostname: {hostname}{Environment.NewLine}  service: http://localhost:{port}{Environment.NewLine}";
-
-        string updatedContents;
-        var fallbackIndex = contents.IndexOf(fallbackLine, StringComparison.Ordinal);
-        if (fallbackIndex >= 0)
+        var lines = contents.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
+        var insertIndex = lines.FindIndex(line => line.Contains("http_status:404", StringComparison.OrdinalIgnoreCase));
+        if (insertIndex < 0)
         {
-            updatedContents = contents.Insert(fallbackIndex, ingressBlock);
-        }
-        else
-        {
-            var prefix = string.IsNullOrWhiteSpace(contents) ? string.Empty : contents.TrimEnd() + Environment.NewLine;
-            updatedContents = $"{prefix}{ingressBlock}{fallbackLine}{Environment.NewLine}";
+            throw new InvalidOperationException("cloudflared fallback ingress was not found.");
         }
 
+        lines.Insert(insertIndex, $"  service: http://localhost:{port}");
+        lines.Insert(insertIndex, $"- hostname: {hostname}");
+
+        var updatedContents = string.Join(Environment.NewLine, lines).TrimEnd() + Environment.NewLine;
         await _fileSystem.WriteAllBytesAsync(configPath, Encoding.UTF8.GetBytes(updatedContents), ct);
     }
 
@@ -74,7 +70,12 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
         }
 
         var tunnelInfo = await _cloudflaredService.GetTunnelInfoAsync(ct);
-        if (string.IsNullOrWhiteSpace(tunnelInfo.ConfigPath) || !_fileSystem.FileExists(tunnelInfo.ConfigPath))
+        if (string.IsNullOrWhiteSpace(tunnelInfo.ConfigPath))
+        {
+            throw new InvalidOperationException("cloudflared config path is not available.");
+        }
+
+        if (!_fileSystem.FileExists(tunnelInfo.ConfigPath))
         {
             return;
         }

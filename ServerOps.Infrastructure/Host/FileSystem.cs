@@ -48,6 +48,17 @@ public sealed class FileSystem : IFileSystem
         }
     }
 
+    public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive)
+    {
+        if (!Directory.Exists(path))
+        {
+            return Array.Empty<string>();
+        }
+
+        var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        return Directory.GetFiles(path, searchPattern, option);
+    }
+
     public Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default)
         => File.WriteAllBytesAsync(path, bytes, cancellationToken);
 

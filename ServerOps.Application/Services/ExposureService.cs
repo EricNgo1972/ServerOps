@@ -58,11 +58,20 @@ public sealed class ExposureService : IExposureService
 
         var port = service.Ports[0];
         var target = $"{tunnelInfo.TunnelId}.cfargotunnel.com";
+        var normalizedHostname = hostname.Trim();
 
-        await _cloudflareDnsService.EnsureCNameAsync(hostname.Trim(), target, ct);
-        await _cloudflaredConfigService.AddIngressAsync(hostname.Trim(), port, ct);
-        await _cloudflaredConfigService.ReloadAsync(ct);
-        await _endpointRegistry.UpsertAsync(serviceName.Trim(), hostname.Trim(), ct);
+        try
+        {
+            await _cloudflareDnsService.EnsureCNameAsync(normalizedHostname, target, ct);
+            await _cloudflaredConfigService.AddIngressAsync(normalizedHostname, port, ct);
+            await _cloudflaredConfigService.ReloadAsync(ct);
+            await _endpointRegistry.UpsertAsync(serviceName.Trim(), normalizedHostname, ct);
+        }
+        catch
+        {
+            await _cloudflareDnsService.DeleteAsync(normalizedHostname, ct);
+            throw;
+        }
     }
 
     public async Task UpdateAsync(string serviceName, string newHostname, CancellationToken ct = default)

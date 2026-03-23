@@ -38,6 +38,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IPortService, PortService>();
         services.AddSingleton<ICloudflaredService, CloudflaredService>();
         services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
+        services.AddSingleton<IDeploymentPackageValidator, DeploymentPackageValidator>();
+        services.AddSingleton<IHealthVerificationService, HealthVerificationService>();
         services.AddSingleton<IDeploymentService, DeploymentService>();
         services.AddSingleton<AzureTableAppRegistry>();
         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();

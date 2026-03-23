@@ -1,0 +1,51 @@
+using ServerOps.Application.Abstractions;
+using ServerOps.Domain.Enums;
+
+namespace ServerOps.Infrastructure.Deployment;
+
+public sealed class HealthVerificationService : IHealthVerificationService
+{
+    private readonly HttpClient _httpClient;
+    private readonly IAppCatalogService _appCatalogService;
+    private readonly IAppTopologyService _appTopologyService;
+
+    public HealthVerificationService(
+        IHttpClientFactory httpClientFactory,
+        IAppCatalogService appCatalogService,
+        IAppTopologyService appTopologyService)
+    {
+        _httpClient = httpClientFactory.CreateClient();
+        _appCatalogService = appCatalogService;
+        _appTopologyService = appTopologyService;
+    }
+
+    public async Task<bool> VerifyAsync(string appName, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(appName))
+        {
+            return false;
+        }
+
+        var app = await _appCatalogService.GetApplicationAsync(appName, ct);
+        if (!string.IsNullOrWhiteSpace(app?.App.HealthUrl))
+        {
+            try
+            {
+                using var response = await _httpClient.GetAsync(app.App.HealthUrl, ct);
+                return response.IsSuccessStatusCode;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        var topology = await _appTopologyService.GetTopologyAsync(ct);
+        var service = topology.FirstOrDefault(item =>
+            string.Equals(item.ServiceName, appName, StringComparison.OrdinalIgnoreCase));
+
+        return service is not null
+            && service.Status == ServiceStatus.Running
+            && service.Ports.Count > 0;
+    }
+}
