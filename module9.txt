@@ -1,0 +1,3410 @@
+commit 9057c615d0dddb4eacb19ef7fab95ca6a685436b
+Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
+Date:   Mon Mar 23 04:58:00 2026 -0400
+
+    module 9
+
+diff --git a/ServerOps.Application/Abstractions/IDeploymentPackageValidator.cs b/ServerOps.Application/Abstractions/IDeploymentPackageValidator.cs
+new file mode 100644
+index 0000000..dc47ee2
+--- /dev/null
++++ b/ServerOps.Application/Abstractions/IDeploymentPackageValidator.cs
+@@ -0,0 +1,6 @@
++namespace ServerOps.Application.Abstractions;
++
++public interface IDeploymentPackageValidator
++{
++    Task<bool> IsValidAsync(string extractedPath, CancellationToken ct = default);
++}
+diff --git a/ServerOps.Application/Abstractions/IDeploymentService.cs b/ServerOps.Application/Abstractions/IDeploymentService.cs
+index 1701746..8a992f7 100644
+--- a/ServerOps.Application/Abstractions/IDeploymentService.cs
++++ b/ServerOps.Application/Abstractions/IDeploymentService.cs
+@@ -1,8 +1,8 @@
+-using ServerOps.Domain.Entities;
++using ServerOps.Application.DTOs;
+ 
+ namespace ServerOps.Application.Abstractions;
+ 
+ public interface IDeploymentService
+ {
+-    Task<DeploymentRecord> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default);
++    Task<DeploymentResult> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default);
+ }
+diff --git a/ServerOps.Application/Abstractions/IFileSystem.cs b/ServerOps.Application/Abstractions/IFileSystem.cs
+index 2ca7f55..98ad0af 100644
+--- a/ServerOps.Application/Abstractions/IFileSystem.cs
++++ b/ServerOps.Application/Abstractions/IFileSystem.cs
+@@ -10,6 +10,7 @@ public interface IFileSystem
+     void DeleteDirectory(string path, bool recursive);
+     void MoveDirectory(string sourcePath, string destinationPath);
+     void CopyDirectory(string sourcePath, string destinationPath, bool overwrite);
++    IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive);
+     Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default);
+     Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default);
+ }
+diff --git a/ServerOps.Application/Abstractions/IHealthVerificationService.cs b/ServerOps.Application/Abstractions/IHealthVerificationService.cs
+new file mode 100644
+index 0000000..1f4e4b3
+--- /dev/null
++++ b/ServerOps.Application/Abstractions/IHealthVerificationService.cs
+@@ -0,0 +1,6 @@
++namespace ServerOps.Application.Abstractions;
++
++public interface IHealthVerificationService
++{
++    Task<bool> VerifyAsync(string appName, CancellationToken ct = default);
++}
+diff --git a/ServerOps.Application/DTOs/DeploymentResult.cs b/ServerOps.Application/DTOs/DeploymentResult.cs
+new file mode 100644
+index 0000000..2695d15
+--- /dev/null
++++ b/ServerOps.Application/DTOs/DeploymentResult.cs
+@@ -0,0 +1,15 @@
++using ServerOps.Domain.Enums;
++
++namespace ServerOps.Application.DTOs;
++
++public sealed class DeploymentResult
++{
++    public string DeploymentId { get; init; } = string.Empty;
++    public string AppName { get; init; } = string.Empty;
++    public string Version { get; init; } = string.Empty;
++    public DeploymentStatus Status { get; init; } = DeploymentStatus.Pending;
++    public DeploymentStage Stage { get; init; } = DeploymentStage.Pending;
++    public string? Message { get; init; }
++    public DateTimeOffset StartedAtUtc { get; init; }
++    public DateTimeOffset? FinishedAtUtc { get; init; }
++}
+diff --git a/ServerOps.Application/Services/ExposureService.cs b/ServerOps.Application/Services/ExposureService.cs
+index c007df2..458db9f 100644
+--- a/ServerOps.Application/Services/ExposureService.cs
++++ b/ServerOps.Application/Services/ExposureService.cs
+@@ -58,11 +58,20 @@ public sealed class ExposureService : IExposureService
+ 
+         var port = service.Ports[0];
+         var target = $"{tunnelInfo.TunnelId}.cfargotunnel.com";
++        var normalizedHostname = hostname.Trim();
+ 
+-        await _cloudflareDnsService.EnsureCNameAsync(hostname.Trim(), target, ct);
+-        await _cloudflaredConfigService.AddIngressAsync(hostname.Trim(), port, ct);
+-        await _cloudflaredConfigService.ReloadAsync(ct);
+-        await _endpointRegistry.UpsertAsync(serviceName.Trim(), hostname.Trim(), ct);
++        try
++        {
++            await _cloudflareDnsService.EnsureCNameAsync(normalizedHostname, target, ct);
++            await _cloudflaredConfigService.AddIngressAsync(normalizedHostname, port, ct);
++            await _cloudflaredConfigService.ReloadAsync(ct);
++            await _endpointRegistry.UpsertAsync(serviceName.Trim(), normalizedHostname, ct);
++        }
++        catch
++        {
++            await _cloudflareDnsService.DeleteAsync(normalizedHostname, ct);
++            throw;
++        }
+     }
+ 
+     public async Task UpdateAsync(string serviceName, string newHostname, CancellationToken ct = default)
+diff --git a/ServerOps.Domain/Enums/DeploymentStage.cs b/ServerOps.Domain/Enums/DeploymentStage.cs
+new file mode 100644
+index 0000000..c9d45c5
+--- /dev/null
++++ b/ServerOps.Domain/Enums/DeploymentStage.cs
+@@ -0,0 +1,18 @@
++namespace ServerOps.Domain.Enums;
++
++public enum DeploymentStage
++{
++    Pending = 1,
++    Downloading = 2,
++    Extracting = 3,
++    ValidatingPackage = 4,
++    StoppingService = 5,
++    BackingUpCurrent = 6,
++    ActivatingNewVersion = 7,
++    StartingService = 8,
++    VerifyingService = 9,
++    VerifyingHealth = 10,
++    Completed = 11,
++    Failed = 12,
++    RolledBack = 13
++}
+diff --git a/ServerOps.Domain/Enums/DeploymentStatus.cs b/ServerOps.Domain/Enums/DeploymentStatus.cs
+index 974f357..786164d 100644
+--- a/ServerOps.Domain/Enums/DeploymentStatus.cs
++++ b/ServerOps.Domain/Enums/DeploymentStatus.cs
+@@ -5,5 +5,6 @@ public enum DeploymentStatus
+     Pending = 1,
+     Running = 2,
+     Succeeded = 3,
+-    Failed = 4
++    Failed = 4,
++    RolledBack = 5
+ }
+diff --git a/ServerOps.Infrastructure.Tests/CloudflaredConfigServiceTests.cs b/ServerOps.Infrastructure.Tests/CloudflaredConfigServiceTests.cs
+index 708856f..3775e07 100644
+--- a/ServerOps.Infrastructure.Tests/CloudflaredConfigServiceTests.cs
++++ b/ServerOps.Infrastructure.Tests/CloudflaredConfigServiceTests.cs
+@@ -99,6 +99,7 @@ ingress:
+         public void DeleteDirectory(string path, bool recursive) { }
+         public void MoveDirectory(string sourcePath, string destinationPath) { }
+         public void CopyDirectory(string sourcePath, string destinationPath, bool overwrite) { }
++        public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive) => Array.Empty<string>();
+         public Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default)
+         {
+             Contents = Encoding.UTF8.GetString(bytes);
+diff --git a/ServerOps.Infrastructure.Tests/DeploymentServiceTests.cs b/ServerOps.Infrastructure.Tests/DeploymentServiceTests.cs
+new file mode 100644
+index 0000000..38096e0
+--- /dev/null
++++ b/ServerOps.Infrastructure.Tests/DeploymentServiceTests.cs
+@@ -0,0 +1,459 @@
++using System.Net;
++using System.Text;
++using ServerOps.Application.Abstractions;
++using ServerOps.Application.DTOs;
++using ServerOps.Domain.Enums;
++using ServerOps.Infrastructure.Deployment;
++using Xunit;
++
++namespace ServerOps.Infrastructure.Tests;
++
++public sealed class DeploymentServiceTests
++{
++    [Fact]
++    public async Task DeployAsync_Happy_Path_Succeeds()
++    {
++        var fileSystem = new FakeFileSystem();
++        var archiveService = new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll"));
++        var service = CreateService(
++            fileSystem,
++            archiveService,
++            new FakeServiceControlService(
++                startResult: new CommandResult { ExitCode = 0 },
++                stopResult: new CommandResult { ExitCode = 0 }),
++            new FakeDeploymentPackageValidator(true),
++            new FakeHealthVerificationService(true),
++            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
++
++        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
++
++        Assert.Equal(DeploymentStatus.Succeeded, result.Status);
++        Assert.Equal(DeploymentStage.Completed, result.Stage);
++    }
++
++    [Fact]
++    public async Task DeployAsync_Invalid_Package_Fails_Before_Stop()
++    {
++        var control = new FakeServiceControlService();
++        var service = CreateService(
++            new FakeFileSystem(),
++            new FakeArchiveService(_ => { }),
++            control,
++            new FakeDeploymentPackageValidator(false),
++            new FakeHealthVerificationService(true),
++            new FakeAppTopologyService([]));
++
++        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
++
++        Assert.Equal(DeploymentStatus.Failed, result.Status);
++        Assert.Equal(DeploymentStage.ValidatingPackage, result.Stage);
++        Assert.Equal(0, control.StopCalls);
++    }
++
++    [Fact]
++    public async Task DeployAsync_Stop_Failure_Aborts_Deployment()
++    {
++        var control = new FakeServiceControlService(stopResult: new CommandResult { ExitCode = 1, StdErr = "stop failed" });
++        var service = CreateService(
++            new FakeFileSystem(),
++            new FakeArchiveService(_ => { }),
++            control,
++            new FakeDeploymentPackageValidator(true),
++            new FakeHealthVerificationService(true),
++            new FakeAppTopologyService([]));
++
++        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
++
++        Assert.Equal(DeploymentStatus.Failed, result.Status);
++        Assert.Equal(DeploymentStage.StoppingService, result.Stage);
++        Assert.Equal(0, control.StartCalls);
++    }
++
++    [Fact]
++    public async Task DeployAsync_Start_Failure_Triggers_Rollback()
++    {
++        var fileSystem = new FakeFileSystem();
++        fileSystem.CreateDirectory("/apps/phoebus-api/current");
++        fileSystem.AddFile("/apps/phoebus-api/current/old.dll");
++
++        var control = new FakeServiceControlService(
++            startResults:
++            [
++                new CommandResult { ExitCode = 1, StdErr = "start failed" },
++                new CommandResult { ExitCode = 0 }
++            ],
++            stopResult: new CommandResult { ExitCode = 0 });
++
++        var service = CreateService(
++            fileSystem,
++            new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
++            control,
++            new FakeDeploymentPackageValidator(true),
++            new FakeHealthVerificationService(true),
++            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
++
++        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
++
++        Assert.Equal(DeploymentStatus.RolledBack, result.Status);
++        Assert.Equal(DeploymentStage.RolledBack, result.Stage);
++        Assert.Equal(2, control.StartCalls);
++        Assert.True(fileSystem.DirectoryExists("/apps/phoebus-api/current"));
++    }
++
++    [Fact]
++    public async Task DeployAsync_Health_Verification_Failure_Triggers_Rollback()
++    {
++        var fileSystem = new FakeFileSystem();
++        fileSystem.CreateDirectory("/apps/phoebus-api/current");
++        fileSystem.AddFile("/apps/phoebus-api/current/old.dll");
++
++        var control = new FakeServiceControlService(
++            startResults:
++            [
++                new CommandResult { ExitCode = 0 },
++                new CommandResult { ExitCode = 0 }
++            ],
++            stopResult: new CommandResult { ExitCode = 0 });
++
++        var service = CreateService(
++            fileSystem,
++            new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
++            control,
++            new FakeDeploymentPackageValidator(true),
++            new FakeHealthVerificationService(false),
++            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
++
++        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
++
++        Assert.Equal(DeploymentStatus.RolledBack, result.Status);
++        Assert.Equal(DeploymentStage.RolledBack, result.Stage);
++    }
++
++    [Fact]
++    public async Task DeployAsync_First_Deployment_With_No_Current_Folder_Succeeds()
++    {
++        var service = CreateService(
++            new FakeFileSystem(),
++            new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
++            new FakeServiceControlService(
++                startResult: new CommandResult { ExitCode = 0 },
++                stopResult: new CommandResult { ExitCode = 0 }),
++            new FakeDeploymentPackageValidator(true),
++            new FakeHealthVerificationService(true),
++            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
++
++        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
++
++        Assert.Equal(DeploymentStatus.Succeeded, result.Status);
++    }
++
++    [Fact]
++    public async Task DeployAsync_Rollback_Failure_Returns_Failed_Result()
++    {
++        var control = new FakeServiceControlService(
++            startResult: new CommandResult { ExitCode = 1, StdErr = "start failed" },
++            stopResult: new CommandResult { ExitCode = 0 });
++
++        var service = CreateService(
++            new FakeFileSystem(),
++            new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
++            control,
++            new FakeDeploymentPackageValidator(true),
++            new FakeHealthVerificationService(true),
++            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
++
++        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
++
++        Assert.Equal(DeploymentStatus.Failed, result.Status);
++        Assert.Equal(DeploymentStage.Failed, result.Stage);
++        Assert.Contains("Rollback failed", result.Message, StringComparison.OrdinalIgnoreCase);
++    }
++
++    private static DeploymentService CreateService(
++        FakeFileSystem fileSystem,
++        FakeArchiveService archiveService,
++        FakeServiceControlService serviceControlService,
++        FakeDeploymentPackageValidator packageValidator,
++        FakeHealthVerificationService healthVerificationService,
++        FakeAppTopologyService appTopologyService)
++    {
++        return new DeploymentService(
++            new FakeHttpClientFactory(),
++            fileSystem,
++            archiveService,
++            serviceControlService,
++            new FakeRuntimeEnvironment(),
++            packageValidator,
++            healthVerificationService,
++            appTopologyService);
++    }
++
++    private sealed class FakeHttpClientFactory : IHttpClientFactory
++    {
++        public HttpClient CreateClient(string name = "")
++            => new(new StaticHttpMessageHandler()) { BaseAddress = new Uri("https://example.com") };
++    }
++
++    private sealed class StaticHttpMessageHandler : HttpMessageHandler
++    {
++        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
++        {
++            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
++            {
++                Content = new ByteArrayContent(Encoding.UTF8.GetBytes("zip"))
++            });
++        }
++    }
++
++    private sealed class FakeRuntimeEnvironment : IRuntimeEnvironment
++    {
++        public ServerOps.Domain.Enums.OsType GetCurrentOs() => ServerOps.Domain.Enums.OsType.Linux;
++        public string GetAppsRootPath() => "/apps";
++        public string GetCloudflaredConfigPath() => "/etc/cloudflared/config.yml";
++    }
++
++    private sealed class FakeArchiveService : IArchiveService
++    {
++        private readonly Action<FakeFileSystem> _onExtract;
++        private FakeFileSystem? _fileSystem;
++
++        public FakeArchiveService(Action<FakeFileSystem> onExtract)
++        {
++            _onExtract = onExtract;
++        }
++
++        public void Bind(FakeFileSystem fileSystem)
++        {
++            _fileSystem = fileSystem;
++        }
++
++        public Task ExtractZipAsync(string zipPath, string destinationPath, CancellationToken cancellationToken = default)
++        {
++            _fileSystem?.CreateDirectory(destinationPath);
++            _fileSystem?.SetCurrentExtractPath(destinationPath);
++            if (_fileSystem is not null)
++            {
++                _onExtract(_fileSystem);
++            }
++
++            return Task.CompletedTask;
++        }
++    }
++
++    private sealed class FakeServiceControlService : IServiceControlService
++    {
++        private readonly Queue<CommandResult> _startResults = new();
++        private readonly CommandResult _stopResult;
++
++        public FakeServiceControlService(
++            CommandResult? startResult = null,
++            CommandResult? stopResult = null,
++            IEnumerable<CommandResult>? startResults = null)
++        {
++            _stopResult = stopResult ?? new CommandResult { ExitCode = 0 };
++
++            if (startResults is not null)
++            {
++                foreach (var result in startResults)
++                {
++                    _startResults.Enqueue(result);
++                }
++            }
++            else
++            {
++                _startResults.Enqueue(startResult ?? new CommandResult { ExitCode = 0 });
++            }
++        }
++
++        public int StartCalls { get; private set; }
++        public int StopCalls { get; private set; }
++
++        public Task<CommandResult> StartAsync(string serviceName, CancellationToken ct = default)
++        {
++            StartCalls++;
++            return Task.FromResult(_startResults.Count > 0 ? _startResults.Dequeue() : new CommandResult { ExitCode = 0 });
++        }
++
++        public Task<CommandResult> StopAsync(string serviceName, CancellationToken ct = default)
++        {
++            StopCalls++;
++            return Task.FromResult(_stopResult);
++        }
++
++        public Task<CommandResult> RestartAsync(string serviceName, CancellationToken ct = default)
++            => Task.FromResult(new CommandResult { ExitCode = 0 });
++    }
++
++    private sealed class FakeDeploymentPackageValidator : IDeploymentPackageValidator
++    {
++        private readonly bool _isValid;
++
++        public FakeDeploymentPackageValidator(bool isValid)
++        {
++            _isValid = isValid;
++        }
++
++        public Task<bool> IsValidAsync(string extractedPath, CancellationToken ct = default)
++            => Task.FromResult(_isValid);
++    }
++
++    private sealed class FakeHealthVerificationService : IHealthVerificationService
++    {
++        private readonly bool _isHealthy;
++
++        public FakeHealthVerificationService(bool isHealthy)
++        {
++            _isHealthy = isHealthy;
++        }
++
++        public Task<bool> VerifyAsync(string appName, CancellationToken ct = default)
++            => Task.FromResult(_isHealthy);
++    }
++
++    private sealed class FakeAppTopologyService : IAppTopologyService
++    {
++        private readonly IReadOnlyList<ServiceTopology> _topology;
++
++        public FakeAppTopologyService(IReadOnlyList<ServiceTopology> topology)
++        {
++            _topology = topology;
++        }
++
++        public Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default)
++            => Task.FromResult(_topology);
++    }
++
++    private sealed class FakeFileSystem : IFileSystem
++    {
++        private readonly HashSet<string> _directories = new(StringComparer.OrdinalIgnoreCase);
++        private readonly Dictionary<string, byte[]> _files = new(StringComparer.OrdinalIgnoreCase);
++        private string _currentExtractPath = string.Empty;
++
++        public string Combine(params string[] paths) => string.Join("/", paths).Replace("//", "/", StringComparison.Ordinal);
++        public string GetTempPath() => "/tmp";
++        public bool FileExists(string path) => _files.ContainsKey(path);
++        public bool DirectoryExists(string path) => _directories.Contains(path);
++        public void CreateDirectory(string path)
++        {
++            EnsureParents(path);
++            _directories.Add(path);
++        }
++        public void DeleteDirectory(string path, bool recursive)
++        {
++            var directories = _directories.Where(item => item.Equals(path, StringComparison.OrdinalIgnoreCase) || item.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)).ToList();
++            foreach (var directory in directories)
++            {
++                _directories.Remove(directory);
++            }
++
++            var files = _files.Keys.Where(item => item.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase)).ToList();
++            foreach (var file in files)
++            {
++                _files.Remove(file);
++            }
++        }
++        public void MoveDirectory(string sourcePath, string destinationPath)
++        {
++            CopyDirectory(sourcePath, destinationPath, overwrite: true);
++            DeleteDirectory(sourcePath, recursive: true);
++        }
++        public void CopyDirectory(string sourcePath, string destinationPath, bool overwrite)
++        {
++            if (!_directories.Contains(sourcePath))
++            {
++                return;
++            }
++
++            CreateDirectory(destinationPath);
++
++            var directories = _directories
++                .Where(item => item.Equals(sourcePath, StringComparison.OrdinalIgnoreCase) || item.StartsWith(sourcePath + "/", StringComparison.OrdinalIgnoreCase))
++                .ToList();
++
++            foreach (var directory in directories)
++            {
++                var relative = directory[sourcePath.Length..].TrimStart('/');
++                var target = string.IsNullOrWhiteSpace(relative) ? destinationPath : Combine(destinationPath, relative);
++                CreateDirectory(target);
++            }
++
++            var files = _files
++                .Where(item => item.Key.StartsWith(sourcePath + "/", StringComparison.OrdinalIgnoreCase))
++                .ToList();
++
++            foreach (var file in files)
++            {
++                var relative = file.Key[sourcePath.Length..].TrimStart('/');
++                _files[Combine(destinationPath, relative)] = file.Value.ToArray();
++            }
++        }
++        public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive)
++        {
++            return _files.Keys
++                .Where(file => file.StartsWith(path + "/", StringComparison.OrdinalIgnoreCase))
++                .Where(file => MatchesPattern(Path.GetFileName(file), searchPattern))
++                .ToList();
++        }
++        public Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default)
++        {
++            EnsureParents(Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "/");
++            _files[path] = bytes.ToArray();
++            return Task.CompletedTask;
++        }
++        public Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default)
++            => Task.FromResult(_files.TryGetValue(path, out var bytes) ? Encoding.UTF8.GetString(bytes) : string.Empty);
++
++        public void AddFile(string path)
++        {
++            var normalizedPath = path.Replace('\\', '/');
++            EnsureParents(Path.GetDirectoryName(normalizedPath)?.Replace('\\', '/') ?? "/");
++            _files[normalizedPath] = Encoding.UTF8.GetBytes("content");
++        }
++
++        public void SetCurrentExtractPath(string path)
++        {
++            _currentExtractPath = path;
++        }
++
++        private void EnsureParents(string path)
++        {
++            var normalizedPath = path.Replace('\\', '/');
++            if (string.IsNullOrWhiteSpace(normalizedPath) || normalizedPath == "/")
++            {
++                _directories.Add("/");
++                return;
++            }
++
++            var parts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
++            var current = normalizedPath.StartsWith("/", StringComparison.Ordinal) ? "/" : string.Empty;
++
++            foreach (var part in parts)
++            {
++                current = string.IsNullOrEmpty(current) || current == "/"
++                    ? $"{current}{part}".Replace("//", "/", StringComparison.Ordinal)
++                    : $"{current}/{part}";
++                _directories.Add(current);
++            }
++        }
++
++        private static bool MatchesPattern(string fileName, string searchPattern)
++        {
++            if (searchPattern == "*.dll")
++            {
++                return fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
++            }
++
++            if (searchPattern == "*.exe")
++            {
++                return fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
++            }
++
++            if (searchPattern == "*.deps.json")
++            {
++                return fileName.EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase);
++            }
++
++            return false;
++        }
++    }
++}
+diff --git a/ServerOps.Infrastructure/CloudflareTunnel/CloudflareDnsService.cs b/ServerOps.Infrastructure/CloudflareTunnel/CloudflareDnsService.cs
+index 05a95d1..003ca9d 100644
+--- a/ServerOps.Infrastructure/CloudflareTunnel/CloudflareDnsService.cs
++++ b/ServerOps.Infrastructure/CloudflareTunnel/CloudflareDnsService.cs
+@@ -16,7 +16,7 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
+ 
+     public async Task EnsureCNameAsync(string hostname, string target, CancellationToken ct = default)
+     {
+-        if (await ExistsAsync(hostname, ct))
++        if (await ExistsAsync(hostname, target, ct))
+         {
+             return;
+         }
+@@ -41,6 +41,11 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
+     }
+ 
+     public async Task<bool> ExistsAsync(string hostname, CancellationToken ct = default)
++    {
++        return await ExistsAsync(hostname, null, ct);
++    }
++
++    private async Task<bool> ExistsAsync(string hostname, string? target, CancellationToken ct)
+     {
+         var token = GetRequiredEnvironmentVariable("CLOUDFLARE_API_TOKEN");
+         var zoneId = GetRequiredEnvironmentVariable("CLOUDFLARE_ZONE_ID");
+@@ -61,7 +66,31 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
+             return false;
+         }
+ 
+-        return result.GetArrayLength() > 0;
++        foreach (var item in result.EnumerateArray())
++        {
++            if (item.ValueKind != JsonValueKind.Object)
++            {
++                continue;
++            }
++
++            var recordName = item.TryGetProperty("name", out var nameProperty)
++                ? nameProperty.GetString()
++                : null;
++            var recordContent = item.TryGetProperty("content", out var contentProperty)
++                ? contentProperty.GetString()
++                : null;
++
++            var hostnameMatches = string.Equals(recordName, hostname, StringComparison.OrdinalIgnoreCase);
++            var targetMatches = string.IsNullOrWhiteSpace(target)
++                || string.Equals(recordContent, target, StringComparison.OrdinalIgnoreCase);
++
++            if (hostnameMatches && targetMatches)
++            {
++                return true;
++            }
++        }
++
++        return false;
+     }
+ 
+     public async Task DeleteAsync(string hostname, CancellationToken ct = default)
+diff --git a/ServerOps.Infrastructure/CloudflareTunnel/CloudflaredConfigService.cs b/ServerOps.Infrastructure/CloudflareTunnel/CloudflaredConfigService.cs
+index 8fd1098..530ea1b 100644
+--- a/ServerOps.Infrastructure/CloudflareTunnel/CloudflaredConfigService.cs
++++ b/ServerOps.Infrastructure/CloudflareTunnel/CloudflaredConfigService.cs
+@@ -48,21 +48,17 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
+             return;
+         }
+ 
+-        const string fallbackLine = "- service: http_status:404";
+-        var ingressBlock = $"- hostname: {hostname}{Environment.NewLine}  service: http://localhost:{port}{Environment.NewLine}";
+-
+-        string updatedContents;
+-        var fallbackIndex = contents.IndexOf(fallbackLine, StringComparison.Ordinal);
+-        if (fallbackIndex >= 0)
+-        {
+-            updatedContents = contents.Insert(fallbackIndex, ingressBlock);
+-        }
+-        else
++        var lines = contents.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
++        var insertIndex = lines.FindIndex(line => line.Contains("http_status:404", StringComparison.OrdinalIgnoreCase));
++        if (insertIndex < 0)
+         {
+-            var prefix = string.IsNullOrWhiteSpace(contents) ? string.Empty : contents.TrimEnd() + Environment.NewLine;
+-            updatedContents = $"{prefix}{ingressBlock}{fallbackLine}{Environment.NewLine}";
++            throw new InvalidOperationException("cloudflared fallback ingress was not found.");
+         }
+ 
++        lines.Insert(insertIndex, $"  service: http://localhost:{port}");
++        lines.Insert(insertIndex, $"- hostname: {hostname}");
++
++        var updatedContents = string.Join(Environment.NewLine, lines).TrimEnd() + Environment.NewLine;
+         await _fileSystem.WriteAllBytesAsync(configPath, Encoding.UTF8.GetBytes(updatedContents), ct);
+     }
+ 
+@@ -74,7 +70,12 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
+         }
+ 
+         var tunnelInfo = await _cloudflaredService.GetTunnelInfoAsync(ct);
+-        if (string.IsNullOrWhiteSpace(tunnelInfo.ConfigPath) || !_fileSystem.FileExists(tunnelInfo.ConfigPath))
++        if (string.IsNullOrWhiteSpace(tunnelInfo.ConfigPath))
++        {
++            throw new InvalidOperationException("cloudflared config path is not available.");
++        }
++
++        if (!_fileSystem.FileExists(tunnelInfo.ConfigPath))
+         {
+             return;
+         }
+diff --git a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+index 19cedaa..b3a6150 100644
+--- a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
++++ b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+@@ -38,6 +38,8 @@ public static class InfrastructureServiceCollectionExtensions
+         services.AddSingleton<IPortService, PortService>();
+         services.AddSingleton<ICloudflaredService, CloudflaredService>();
+         services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
++        services.AddSingleton<IDeploymentPackageValidator, DeploymentPackageValidator>();
++        services.AddSingleton<IHealthVerificationService, HealthVerificationService>();
+         services.AddSingleton<IDeploymentService, DeploymentService>();
+         services.AddSingleton<AzureTableAppRegistry>();
+         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
+diff --git a/ServerOps.Infrastructure/Deployment/DeploymentPackageValidator.cs b/ServerOps.Infrastructure/Deployment/DeploymentPackageValidator.cs
+new file mode 100644
+index 0000000..eba1165
+--- /dev/null
++++ b/ServerOps.Infrastructure/Deployment/DeploymentPackageValidator.cs
+@@ -0,0 +1,30 @@
++using ServerOps.Application.Abstractions;
++
++namespace ServerOps.Infrastructure.Deployment;
++
++public sealed class DeploymentPackageValidator : IDeploymentPackageValidator
++{
++    private readonly IFileSystem _fileSystem;
++
++    public DeploymentPackageValidator(IFileSystem fileSystem)
++    {
++        _fileSystem = fileSystem;
++    }
++
++    public Task<bool> IsValidAsync(string extractedPath, CancellationToken ct = default)
++    {
++        ct.ThrowIfCancellationRequested();
++
++        if (string.IsNullOrWhiteSpace(extractedPath) || !_fileSystem.DirectoryExists(extractedPath))
++        {
++            return Task.FromResult(false);
++        }
++
++        var files = new List<string>();
++        files.AddRange(_fileSystem.GetFiles(extractedPath, "*.dll", recursive: true));
++        files.AddRange(_fileSystem.GetFiles(extractedPath, "*.exe", recursive: true));
++        files.AddRange(_fileSystem.GetFiles(extractedPath, "*.deps.json", recursive: true));
++
++        return Task.FromResult(files.Count > 0);
++    }
++}
+diff --git a/ServerOps.Infrastructure/Deployment/DeploymentService.cs b/ServerOps.Infrastructure/Deployment/DeploymentService.cs
+index 313c90c..ed6487c 100644
+--- a/ServerOps.Infrastructure/Deployment/DeploymentService.cs
++++ b/ServerOps.Infrastructure/Deployment/DeploymentService.cs
+@@ -1,5 +1,5 @@
+ using ServerOps.Application.Abstractions;
+-using ServerOps.Domain.Entities;
++using ServerOps.Application.DTOs;
+ using ServerOps.Domain.Enums;
+ 
+ namespace ServerOps.Infrastructure.Deployment;
+@@ -11,62 +11,113 @@ public sealed class DeploymentService : IDeploymentService
+     private readonly IArchiveService _archiveService;
+     private readonly IServiceControlService _serviceControlService;
+     private readonly IRuntimeEnvironment _runtimeEnvironment;
++    private readonly IDeploymentPackageValidator _deploymentPackageValidator;
++    private readonly IHealthVerificationService _healthVerificationService;
++    private readonly IAppTopologyService _appTopologyService;
+ 
+     public DeploymentService(
+         IHttpClientFactory httpClientFactory,
+         IFileSystem fileSystem,
+         IArchiveService archiveService,
+         IServiceControlService serviceControlService,
+-        IRuntimeEnvironment runtimeEnvironment)
++        IRuntimeEnvironment runtimeEnvironment,
++        IDeploymentPackageValidator deploymentPackageValidator,
++        IHealthVerificationService healthVerificationService,
++        IAppTopologyService appTopologyService)
+     {
+         _httpClient = httpClientFactory.CreateClient();
+         _fileSystem = fileSystem;
+         _archiveService = archiveService;
+         _serviceControlService = serviceControlService;
+         _runtimeEnvironment = runtimeEnvironment;
++        _deploymentPackageValidator = deploymentPackageValidator;
++        _healthVerificationService = healthVerificationService;
++        _appTopologyService = appTopologyService;
+     }
+ 
+-    public async Task<DeploymentRecord> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default)
++    public async Task<DeploymentResult> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default)
+     {
+-        var record = new DeploymentRecord
++        var startedAtUtc = DateTimeOffset.UtcNow;
++        var deploymentId = Guid.NewGuid().ToString("N");
++        var version = ExtractVersion(assetUrl);
++
++        if (string.IsNullOrWhiteSpace(appName))
+         {
+-            Id = Guid.NewGuid().ToString("N"),
+-            AppName = appName,
+-            Version = ExtractVersion(assetUrl),
+-            Timestamp = DateTimeOffset.UtcNow,
+-            Status = DeploymentStatus.Running
+-        };
++            return CreateResult(
++                deploymentId,
++                appName,
++                version,
++                DeploymentStatus.Failed,
++                DeploymentStage.Failed,
++                "Application name is required.",
++                startedAtUtc,
++                DateTimeOffset.UtcNow);
++        }
+ 
+-        var tempFolder = _fileSystem.Combine(_fileSystem.GetTempPath(), "serverops", record.Id);
++        if (string.IsNullOrWhiteSpace(assetUrl))
++        {
++            return CreateResult(
++                deploymentId,
++                appName,
++                version,
++                DeploymentStatus.Failed,
++                DeploymentStage.Failed,
++                "Asset URL is required.",
++                startedAtUtc,
++                DateTimeOffset.UtcNow);
++        }
++
++        var tempFolder = _fileSystem.Combine(_fileSystem.GetTempPath(), "serverops", deploymentId);
+         var zipPath = _fileSystem.Combine(tempFolder, $"{appName}.zip");
+         var extractPath = _fileSystem.Combine(tempFolder, "extracted");
++        var appRoot = _fileSystem.Combine(_runtimeEnvironment.GetAppsRootPath(), appName);
++        var currentPath = _fileSystem.Combine(appRoot, "current");
++        var backupPath = _fileSystem.Combine(appRoot, $"backup_{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
++        var stagingPath = _fileSystem.Combine(appRoot, "staging");
++        var hasCurrent = _fileSystem.DirectoryExists(currentPath);
+ 
+         try
+         {
+             _fileSystem.CreateDirectory(tempFolder);
+             _fileSystem.CreateDirectory(extractPath);
++            _fileSystem.CreateDirectory(appRoot);
+ 
+-            var bytes = await _httpClient.GetByteArrayAsync(assetUrl, cancellationToken);
++            var bytes = await DownloadAsync(assetUrl, cancellationToken);
+             await _fileSystem.WriteAllBytesAsync(zipPath, bytes, cancellationToken);
+-            await _archiveService.ExtractZipAsync(zipPath, extractPath, cancellationToken);
+ 
+-            var appRoot = _fileSystem.Combine(_runtimeEnvironment.GetAppsRootPath(), appName);
+-            var currentPath = _fileSystem.Combine(appRoot, "current");
+-            var backupPath = _fileSystem.Combine(appRoot, $"backup_{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+-            var stagingPath = _fileSystem.Combine(appRoot, "staging");
++            await _archiveService.ExtractZipAsync(zipPath, extractPath, cancellationToken);
+ 
+-            _fileSystem.CreateDirectory(appRoot);
++            var packageIsValid = await _deploymentPackageValidator.IsValidAsync(extractPath, cancellationToken);
++            if (!packageIsValid)
++            {
++                return CreateResult(
++                    deploymentId,
++                    appName,
++                    version,
++                    DeploymentStatus.Failed,
++                    DeploymentStage.ValidatingPackage,
++                    "Deployment package validation failed.",
++                    startedAtUtc,
++                    DateTimeOffset.UtcNow);
++            }
+ 
+             var stopResult = await _serviceControlService.StopAsync(appName, cancellationToken);
+             if (!stopResult.Succeeded)
+             {
+-                return record with { Status = DeploymentStatus.Failed };
++                return CreateResult(
++                    deploymentId,
++                    appName,
++                    version,
++                    DeploymentStatus.Failed,
++                    DeploymentStage.StoppingService,
++                    GetCommandMessage("Failed to stop service.", stopResult),
++                    startedAtUtc,
++                    DateTimeOffset.UtcNow);
+             }
+ 
+-            if (_fileSystem.DirectoryExists(currentPath))
++            if (hasCurrent)
+             {
+                 _fileSystem.CopyDirectory(currentPath, backupPath, overwrite: true);
+-                _fileSystem.DeleteDirectory(currentPath, recursive: true);
+             }
+ 
+             if (_fileSystem.DirectoryExists(stagingPath))
+@@ -75,23 +126,196 @@ public sealed class DeploymentService : IDeploymentService
+             }
+ 
+             _fileSystem.CopyDirectory(extractPath, stagingPath, overwrite: true);
++
++            if (_fileSystem.DirectoryExists(currentPath))
++            {
++                _fileSystem.DeleteDirectory(currentPath, recursive: true);
++            }
++
+             _fileSystem.MoveDirectory(stagingPath, currentPath);
+ 
+             var startResult = await _serviceControlService.StartAsync(appName, cancellationToken);
+-            return record with
++            if (!startResult.Succeeded)
++            {
++                return await RollbackAsync(
++                    deploymentId,
++                    appName,
++                    version,
++                    startedAtUtc,
++                    backupPath,
++                    currentPath,
++                    hasCurrent,
++                    GetCommandMessage("Failed to start service.", startResult),
++                    cancellationToken);
++            }
++
++            var serviceVerified = await VerifyServiceAsync(appName, cancellationToken);
++            if (!serviceVerified)
++            {
++                return await RollbackAsync(
++                    deploymentId,
++                    appName,
++                    version,
++                    startedAtUtc,
++                    backupPath,
++                    currentPath,
++                    hasCurrent,
++                    "Service verification failed after deployment.",
++                    cancellationToken);
++            }
++
++            var healthVerified = await _healthVerificationService.VerifyAsync(appName, cancellationToken);
++            if (!healthVerified)
++            {
++                return await RollbackAsync(
++                    deploymentId,
++                    appName,
++                    version,
++                    startedAtUtc,
++                    backupPath,
++                    currentPath,
++                    hasCurrent,
++                    "Health verification failed after deployment.",
++                    cancellationToken);
++            }
++
++            return CreateResult(
++                deploymentId,
++                appName,
++                version,
++                DeploymentStatus.Succeeded,
++                DeploymentStage.Completed,
++                "Deployment completed successfully.",
++                startedAtUtc,
++                DateTimeOffset.UtcNow);
++        }
++        catch (Exception ex)
++        {
++            return CreateResult(
++                deploymentId,
++                appName,
++                version,
++                DeploymentStatus.Failed,
++                DeploymentStage.Failed,
++                ex.Message,
++                startedAtUtc,
++                DateTimeOffset.UtcNow);
++        }
++    }
++
++    private async Task<byte[]> DownloadAsync(string assetUrl, CancellationToken cancellationToken)
++    {
++        return await _httpClient.GetByteArrayAsync(assetUrl, cancellationToken);
++    }
++
++    private async Task<bool> VerifyServiceAsync(string appName, CancellationToken cancellationToken)
++    {
++        var topology = await _appTopologyService.GetTopologyAsync(cancellationToken);
++        return topology.Any(item =>
++            string.Equals(item.ServiceName, appName, StringComparison.OrdinalIgnoreCase) &&
++            item.Status == ServiceStatus.Running);
++    }
++
++    private async Task<DeploymentResult> RollbackAsync(
++        string deploymentId,
++        string appName,
++        string version,
++        DateTimeOffset startedAtUtc,
++        string backupPath,
++        string currentPath,
++        bool hasBackup,
++        string message,
++        CancellationToken cancellationToken)
++    {
++        if (!hasBackup || !_fileSystem.DirectoryExists(backupPath))
++        {
++            return CreateResult(
++                deploymentId,
++                appName,
++                version,
++                DeploymentStatus.Failed,
++                DeploymentStage.Failed,
++                $"{message} Rollback failed because no backup is available.",
++                startedAtUtc,
++                DateTimeOffset.UtcNow);
++        }
++
++        try
++        {
++            if (_fileSystem.DirectoryExists(currentPath))
+             {
+-                Status = startResult.Succeeded
+-                    ? DeploymentStatus.Succeeded
+-                    : DeploymentStatus.Failed
+-            };
++                _fileSystem.DeleteDirectory(currentPath, recursive: true);
++            }
++
++            _fileSystem.CopyDirectory(backupPath, currentPath, overwrite: true);
++
++            var restartResult = await _serviceControlService.StartAsync(appName, cancellationToken);
++            if (!restartResult.Succeeded)
++            {
++                return CreateResult(
++                    deploymentId,
++                    appName,
++                    version,
++                    DeploymentStatus.Failed,
++                    DeploymentStage.Failed,
++                    $"{message} Rollback restart failed. {GetCommandMessage("Service start failed.", restartResult)}",
++                    startedAtUtc,
++                    DateTimeOffset.UtcNow);
++            }
++
++            return CreateResult(
++                deploymentId,
++                appName,
++                version,
++                DeploymentStatus.RolledBack,
++                DeploymentStage.RolledBack,
++                $"{message} Rollback completed successfully.",
++                startedAtUtc,
++                DateTimeOffset.UtcNow);
+         }
+         catch (Exception ex)
+         {
+-            var _ = ex.Message;
+-            return record with { Status = DeploymentStatus.Failed };
++            return CreateResult(
++                deploymentId,
++                appName,
++                version,
++                DeploymentStatus.Failed,
++                DeploymentStage.Failed,
++                $"{message} Rollback failed: {ex.Message}",
++                startedAtUtc,
++                DateTimeOffset.UtcNow);
+         }
+     }
+ 
++    private static DeploymentResult CreateResult(
++        string deploymentId,
++        string appName,
++        string version,
++        DeploymentStatus status,
++        DeploymentStage stage,
++        string? message,
++        DateTimeOffset startedAtUtc,
++        DateTimeOffset? finishedAtUtc)
++    {
++        return new DeploymentResult
++        {
++            DeploymentId = deploymentId,
++            AppName = appName,
++            Version = version,
++            Status = status,
++            Stage = stage,
++            Message = message,
++            StartedAtUtc = startedAtUtc,
++            FinishedAtUtc = finishedAtUtc
++        };
++    }
++
++    private static string GetCommandMessage(string prefix, CommandResult result)
++    {
++        var details = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
++        return string.IsNullOrWhiteSpace(details) ? prefix : $"{prefix} {details.Trim()}";
++    }
++
+     private static string ExtractVersion(string assetUrl)
+     {
+         if (string.IsNullOrWhiteSpace(assetUrl))
+diff --git a/ServerOps.Infrastructure/Deployment/HealthVerificationService.cs b/ServerOps.Infrastructure/Deployment/HealthVerificationService.cs
+new file mode 100644
+index 0000000..fdfd0bf
+--- /dev/null
++++ b/ServerOps.Infrastructure/Deployment/HealthVerificationService.cs
+@@ -0,0 +1,51 @@
++using ServerOps.Application.Abstractions;
++using ServerOps.Domain.Enums;
++
++namespace ServerOps.Infrastructure.Deployment;
++
++public sealed class HealthVerificationService : IHealthVerificationService
++{
++    private readonly HttpClient _httpClient;
++    private readonly IAppCatalogService _appCatalogService;
++    private readonly IAppTopologyService _appTopologyService;
++
++    public HealthVerificationService(
++        IHttpClientFactory httpClientFactory,
++        IAppCatalogService appCatalogService,
++        IAppTopologyService appTopologyService)
++    {
++        _httpClient = httpClientFactory.CreateClient();
++        _appCatalogService = appCatalogService;
++        _appTopologyService = appTopologyService;
++    }
++
++    public async Task<bool> VerifyAsync(string appName, CancellationToken ct = default)
++    {
++        if (string.IsNullOrWhiteSpace(appName))
++        {
++            return false;
++        }
++
++        var app = await _appCatalogService.GetApplicationAsync(appName, ct);
++        if (!string.IsNullOrWhiteSpace(app?.App.HealthUrl))
++        {
++            try
++            {
++                using var response = await _httpClient.GetAsync(app.App.HealthUrl, ct);
++                return response.IsSuccessStatusCode;
++            }
++            catch
++            {
++                return false;
++            }
++        }
++
++        var topology = await _appTopologyService.GetTopologyAsync(ct);
++        var service = topology.FirstOrDefault(item =>
++            string.Equals(item.ServiceName, appName, StringComparison.OrdinalIgnoreCase));
++
++        return service is not null
++            && service.Status == ServiceStatus.Running
++            && service.Ports.Count > 0;
++    }
++}
+diff --git a/ServerOps.Infrastructure/Host/FileSystem.cs b/ServerOps.Infrastructure/Host/FileSystem.cs
+index 814dd1d..d49fb65 100644
+--- a/ServerOps.Infrastructure/Host/FileSystem.cs
++++ b/ServerOps.Infrastructure/Host/FileSystem.cs
+@@ -48,6 +48,17 @@ public sealed class FileSystem : IFileSystem
+         }
+     }
+ 
++    public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive)
++    {
++        if (!Directory.Exists(path))
++        {
++            return Array.Empty<string>();
++        }
++
++        var option = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
++        return Directory.GetFiles(path, searchPattern, option);
++    }
++
+     public Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default)
+         => File.WriteAllBytesAsync(path, bytes, cancellationToken);
+ 
+diff --git a/ServerOps.Web/Components/Pages/Releases.razor b/ServerOps.Web/Components/Pages/Releases.razor
+index 9010d38..8bbe78e 100644
+--- a/ServerOps.Web/Components/Pages/Releases.razor
++++ b/ServerOps.Web/Components/Pages/Releases.razor
+@@ -15,7 +15,12 @@
+         <label for="app">Application Name</label>
+         <InputText id="app" @bind-Value="_deployment.AppName" />
+     </div>
++    <div class="form-row">
++        <label for="assetUrl">Asset URL</label>
++        <InputText id="assetUrl" @bind-Value="_deployment.AssetUrl" />
++    </div>
+     <button type="submit">Load Releases</button>
++    <button type="button" @onclick="DeployFromInputAsync">Deploy</button>
+ </EditForm>
+ 
+ @if (!string.IsNullOrWhiteSpace(_message))
+@@ -54,10 +59,23 @@
+     </div>
+ }
+ 
++@if (_deploymentResult is not null)
++{
++    <article class="card">
++        <h2>Deployment Result</h2>
++        <p>Status: @_deploymentResult.Status</p>
++        <p>Stage: @_deploymentResult.Stage</p>
++        <p>Message: @(string.IsNullOrWhiteSpace(_deploymentResult.Message) ? "-" : _deploymentResult.Message)</p>
++        <p>Started: @_deploymentResult.StartedAtUtc.ToLocalTime()</p>
++        <p>Finished: @(_deploymentResult.FinishedAtUtc?.ToLocalTime().ToString() ?? "-")</p>
++    </article>
++}
++
+ @code {
+     private readonly ReleaseQueryDto _query = new();
+     private readonly DeploymentRequestDto _deployment = new();
+     private List<ReleaseInfo> _releases = [];
++    private DeploymentResult? _deploymentResult;
+     private string _message = string.Empty;
+ 
+     private async Task SearchAsync()
+@@ -74,7 +92,19 @@
+             return;
+         }
+ 
+-        var record = await DeploymentService.DeployAsync(_deployment.AppName, assetUrl);
+-        _message = $"{record.AppName} deployment {record.Status} at {record.Timestamp.LocalDateTime}.";
++        _deployment.AssetUrl = assetUrl;
++        _deploymentResult = await DeploymentService.DeployAsync(_deployment.AppName, assetUrl);
++        _message = $"{_deploymentResult.AppName} deployment {_deploymentResult.Status} at {_deploymentResult.StartedAtUtc.LocalDateTime}.";
++    }
++
++    private async Task DeployFromInputAsync()
++    {
++        if (string.IsNullOrWhiteSpace(_deployment.AssetUrl))
++        {
++            _message = "Asset URL is required.";
++            return;
++        }
++
++        await DeployAsync(_deployment.AssetUrl);
+     }
+ }
+diff --git a/module8.txt b/module8.txt
+new file mode 100644
+index 0000000..c7a29a9
+--- /dev/null
++++ b/module8.txt
+@@ -0,0 +1,2138 @@
++commit 5f6bb905a3927611c0fef5d51c1e2c506c588eab
++Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
++Date:   Mon Mar 23 04:35:10 2026 -0400
++
++    module 8
++
++diff --git a/ServerOps.Application.Tests/EndpointServiceTests.cs b/ServerOps.Application.Tests/EndpointServiceTests.cs
++index dd42179..2ccea91 100644
++--- a/ServerOps.Application.Tests/EndpointServiceTests.cs
+++++ b/ServerOps.Application.Tests/EndpointServiceTests.cs
++@@ -68,6 +68,35 @@ public sealed class EndpointServiceTests
++         Assert.False(endpoint.IsExposed);
++     }
++ 
+++    [Fact]
+++    public async Task GetEndpointsAsync_Matches_Service_Name_Case_Insensitively_With_Service_Suffix()
+++    {
+++        var service = CreateService(
+++            [new ServiceTopology { ServiceName = "phoebus-api.service", Ports = [5000] }],
+++            [new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" }],
+++            new TunnelInfo { IsRunning = true });
+++
+++        var endpoints = await service.GetEndpointsAsync();
+++
+++        var endpoint = Assert.Single(endpoints);
+++        Assert.Equal("https://phoebus.local", endpoint.PublicUrl);
+++        Assert.True(endpoint.IsExposed);
+++    }
+++
+++    [Fact]
+++    public async Task GetEndpointsAsync_Returns_Null_Port_When_Service_Has_No_Ports()
+++    {
+++        var service = CreateService(
+++            [new ServiceTopology { ServiceName = "phoebus-api", Ports = [] }],
+++            [new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" }],
+++            new TunnelInfo { IsRunning = true });
+++
+++        var endpoints = await service.GetEndpointsAsync();
+++
+++        var endpoint = Assert.Single(endpoints);
+++        Assert.Null(endpoint.Port);
+++    }
+++
++     private static EndpointService CreateService(
++         IReadOnlyList<ServiceTopology> topology,
++         IReadOnlyList<EndpointMapping> mappings,
++@@ -103,6 +132,12 @@ public sealed class EndpointServiceTests
++ 
++         public Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default)
++             => Task.FromResult(_mappings);
+++
+++        public Task UpsertAsync(string serviceName, string hostname, CancellationToken ct = default)
+++            => Task.CompletedTask;
+++
+++        public Task RemoveAsync(string serviceName, CancellationToken ct = default)
+++            => Task.CompletedTask;
++     }
++ 
++     private sealed class FakeCloudflaredService : ICloudflaredService
++diff --git a/ServerOps.Application.Tests/ExposureServiceTests.cs b/ServerOps.Application.Tests/ExposureServiceTests.cs
++new file mode 100644
++index 0000000..f266f79
++--- /dev/null
+++++ b/ServerOps.Application.Tests/ExposureServiceTests.cs
++@@ -0,0 +1,248 @@
+++using ServerOps.Application.Abstractions;
+++using ServerOps.Application.DTOs;
+++using ServerOps.Application.Models;
+++using ServerOps.Application.Services;
+++using ServerOps.Domain.Entities;
+++using Xunit;
+++
+++namespace ServerOps.Application.Tests;
+++
+++public sealed class ExposureServiceTests
+++{
+++    [Fact]
+++    public async Task ExposeAsync_Service_Exists_Succeeds()
+++    {
+++        var topology = new[]
+++        {
+++            new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000] }
+++        };
+++        var registry = new FakeEndpointRegistry();
+++        var dns = new FakeCloudflareDnsService();
+++        var config = new FakeCloudflaredConfigService();
+++        var service = new ExposureService(
+++            new FakeTopologyService(topology),
+++            registry,
+++            new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
+++            dns,
+++            config);
+++
+++        await service.ExposeAsync("phoebus-api", "phoebus.local");
+++
+++        Assert.Equal("phoebus.local", dns.Hostname);
+++        Assert.Equal("abc123.cfargotunnel.com", dns.Target);
+++        Assert.Equal("phoebus.local", config.Hostname);
+++        Assert.Equal(5000, config.Port);
+++        Assert.True(config.ReloadCalled);
+++        var mapping = Assert.Single(await registry.GetMappingsAsync());
+++        Assert.Equal("phoebus-api", mapping.ServiceName);
+++        Assert.Equal("phoebus.local", mapping.Hostname);
+++    }
+++
+++    [Fact]
+++    public async Task ExposeAsync_No_Port_Fails()
+++    {
+++        var service = new ExposureService(
+++            new FakeTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Ports = [] }]),
+++            new FakeEndpointRegistry(),
+++            new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
+++            new FakeCloudflareDnsService(),
+++            new FakeCloudflaredConfigService());
+++
+++        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExposeAsync("phoebus-api", "phoebus.local"));
+++    }
+++
+++    [Fact]
+++    public async Task ExposeAsync_Tunnel_Down_Fails()
+++    {
+++        var service = new ExposureService(
+++            new FakeTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000] }]),
+++            new FakeEndpointRegistry(),
+++            new FakeCloudflaredService(new TunnelInfo { IsRunning = false, TunnelId = "abc123" }),
+++            new FakeCloudflareDnsService(),
+++            new FakeCloudflaredConfigService());
+++
+++        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExposeAsync("phoebus-api", "phoebus.local"));
+++    }
+++
+++    [Fact]
+++    public async Task UnexposeAsync_Removes_Existing_Mapping()
+++    {
+++        var registry = new FakeEndpointRegistry(
+++            new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" });
+++        var dns = new FakeCloudflareDnsService();
+++        var config = new FakeCloudflaredConfigService();
+++        var service = new ExposureService(
+++            new FakeTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000] }]),
+++            registry,
+++            new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
+++            dns,
+++            config);
+++
+++        await service.UnexposeAsync("phoebus-api");
+++
+++        Assert.Equal("phoebus.local", dns.DeletedHostname);
+++        Assert.Equal("phoebus.local", config.RemovedHostname);
+++        Assert.True(config.ReloadCalled);
+++        Assert.Empty(await registry.GetMappingsAsync());
+++    }
+++
+++    [Fact]
+++    public async Task UnexposeAsync_NonExisting_Mapping_Does_Not_Error()
+++    {
+++        var dns = new FakeCloudflareDnsService();
+++        var config = new FakeCloudflaredConfigService();
+++        var service = new ExposureService(
+++            new FakeTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000] }]),
+++            new FakeEndpointRegistry(),
+++            new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
+++            dns,
+++            config);
+++
+++        await service.UnexposeAsync("phoebus-api");
+++
+++        Assert.Equal(string.Empty, dns.DeletedHostname);
+++        Assert.Equal(string.Empty, config.RemovedHostname);
+++        Assert.False(config.ReloadCalled);
+++    }
+++
+++    [Fact]
+++    public async Task UpdateAsync_Replaces_Old_Hostname()
+++    {
+++        var registry = new FakeEndpointRegistry(
+++            new EndpointMapping { ServiceName = "phoebus-api", Hostname = "old.phoebus.local" });
+++        var dns = new FakeCloudflareDnsService();
+++        var config = new FakeCloudflaredConfigService();
+++        var service = new ExposureService(
+++            new FakeTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000] }]),
+++            registry,
+++            new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
+++            dns,
+++            config);
+++
+++        await service.UpdateAsync("phoebus-api", "new.phoebus.local");
+++
+++        Assert.Equal("old.phoebus.local", dns.DeletedHostname);
+++        Assert.Equal("new.phoebus.local", dns.Hostname);
+++        Assert.Equal("new.phoebus.local", config.Hostname);
+++        var mapping = Assert.Single(await registry.GetMappingsAsync());
+++        Assert.Equal("new.phoebus.local", mapping.Hostname);
+++    }
+++
+++    private sealed class FakeTopologyService : IAppTopologyService
+++    {
+++        private readonly IReadOnlyList<ServiceTopology> _topology;
+++
+++        public FakeTopologyService(IReadOnlyList<ServiceTopology> topology)
+++        {
+++            _topology = topology;
+++        }
+++
+++        public Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default)
+++            => Task.FromResult(_topology);
+++    }
+++
+++    private sealed class FakeEndpointRegistry : IEndpointRegistry
+++    {
+++        private readonly Dictionary<string, EndpointMapping> _mappings = new(StringComparer.OrdinalIgnoreCase);
+++
+++        public FakeEndpointRegistry(params EndpointMapping[] mappings)
+++        {
+++            foreach (var mapping in mappings)
+++            {
+++                _mappings[mapping.ServiceName] = mapping;
+++            }
+++        }
+++
+++        public Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default)
+++            => Task.FromResult<IReadOnlyList<EndpointMapping>>(_mappings.Values.ToList());
+++
+++        public Task UpsertAsync(string serviceName, string hostname, CancellationToken ct = default)
+++        {
+++            _mappings[serviceName] = new EndpointMapping
+++            {
+++                ServiceName = serviceName,
+++                Hostname = hostname
+++            };
+++
+++            return Task.CompletedTask;
+++        }
+++
+++        public Task RemoveAsync(string serviceName, CancellationToken ct = default)
+++        {
+++            _mappings.Remove(serviceName);
+++            return Task.CompletedTask;
+++        }
+++    }
+++
+++    private sealed class FakeCloudflaredService : ICloudflaredService
+++    {
+++        private readonly TunnelInfo _tunnelInfo;
+++
+++        public FakeCloudflaredService(TunnelInfo tunnelInfo)
+++        {
+++            _tunnelInfo = tunnelInfo;
+++        }
+++
+++        public Task<bool> IsInstalledAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+++
+++        public Task<bool> IsRunningAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo.IsRunning);
+++
+++        public Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo);
+++
+++        public Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default)
+++            => Task.FromResult(new CommandResult());
+++
+++        public Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default)
+++            => Task.FromResult(new CommandResult());
+++    }
+++
+++    private sealed class FakeCloudflareDnsService : ICloudflareDnsService
+++    {
+++        public string Hostname { get; private set; } = string.Empty;
+++        public string Target { get; private set; } = string.Empty;
+++        public string DeletedHostname { get; private set; } = string.Empty;
+++
+++        public Task EnsureCNameAsync(string hostname, string target, CancellationToken ct = default)
+++        {
+++            Hostname = hostname;
+++            Target = target;
+++            return Task.CompletedTask;
+++        }
+++
+++        public Task<bool> ExistsAsync(string hostname, CancellationToken ct = default)
+++            => Task.FromResult(false);
+++
+++        public Task DeleteAsync(string hostname, CancellationToken ct = default)
+++        {
+++            DeletedHostname = hostname;
+++            return Task.CompletedTask;
+++        }
+++    }
+++
+++    private sealed class FakeCloudflaredConfigService : ICloudflaredConfigService
+++    {
+++        public string Hostname { get; private set; } = string.Empty;
+++        public string RemovedHostname { get; private set; } = string.Empty;
+++        public int Port { get; private set; }
+++        public bool ReloadCalled { get; private set; }
+++
+++        public Task AddIngressAsync(string hostname, int port, CancellationToken ct = default)
+++        {
+++            Hostname = hostname;
+++            Port = port;
+++            return Task.CompletedTask;
+++        }
+++
+++        public Task RemoveIngressAsync(string hostname, CancellationToken ct = default)
+++        {
+++            RemovedHostname = hostname;
+++            return Task.CompletedTask;
+++        }
+++
+++        public Task ReloadAsync(CancellationToken ct = default)
+++        {
+++            ReloadCalled = true;
+++            return Task.CompletedTask;
+++        }
+++    }
+++}
++diff --git a/ServerOps.Application/Abstractions/ICloudflareDnsService.cs b/ServerOps.Application/Abstractions/ICloudflareDnsService.cs
++new file mode 100644
++index 0000000..5ad9307
++--- /dev/null
+++++ b/ServerOps.Application/Abstractions/ICloudflareDnsService.cs
++@@ -0,0 +1,8 @@
+++namespace ServerOps.Application.Abstractions;
+++
+++public interface ICloudflareDnsService
+++{
+++    Task EnsureCNameAsync(string hostname, string target, CancellationToken ct = default);
+++    Task<bool> ExistsAsync(string hostname, CancellationToken ct = default);
+++    Task DeleteAsync(string hostname, CancellationToken ct = default);
+++}
++diff --git a/ServerOps.Application/Abstractions/ICloudflaredConfigService.cs b/ServerOps.Application/Abstractions/ICloudflaredConfigService.cs
++new file mode 100644
++index 0000000..0a14fd0
++--- /dev/null
+++++ b/ServerOps.Application/Abstractions/ICloudflaredConfigService.cs
++@@ -0,0 +1,8 @@
+++namespace ServerOps.Application.Abstractions;
+++
+++public interface ICloudflaredConfigService
+++{
+++    Task AddIngressAsync(string hostname, int port, CancellationToken ct = default);
+++    Task RemoveIngressAsync(string hostname, CancellationToken ct = default);
+++    Task ReloadAsync(CancellationToken ct = default);
+++}
++diff --git a/ServerOps.Application/Abstractions/IEndpointRegistry.cs b/ServerOps.Application/Abstractions/IEndpointRegistry.cs
++index 1a98b45..db295d5 100644
++--- a/ServerOps.Application/Abstractions/IEndpointRegistry.cs
+++++ b/ServerOps.Application/Abstractions/IEndpointRegistry.cs
++@@ -5,4 +5,6 @@ namespace ServerOps.Application.Abstractions;
++ public interface IEndpointRegistry
++ {
++     Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default);
+++    Task UpsertAsync(string serviceName, string hostname, CancellationToken ct = default);
+++    Task RemoveAsync(string serviceName, CancellationToken ct = default);
++ }
++diff --git a/ServerOps.Application/Abstractions/IExposureService.cs b/ServerOps.Application/Abstractions/IExposureService.cs
++new file mode 100644
++index 0000000..f3801ef
++--- /dev/null
+++++ b/ServerOps.Application/Abstractions/IExposureService.cs
++@@ -0,0 +1,8 @@
+++namespace ServerOps.Application.Abstractions;
+++
+++public interface IExposureService
+++{
+++    Task ExposeAsync(string serviceName, string hostname, CancellationToken ct = default);
+++    Task UpdateAsync(string serviceName, string newHostname, CancellationToken ct = default);
+++    Task UnexposeAsync(string serviceName, CancellationToken ct = default);
+++}
++diff --git a/ServerOps.Application/DTOs/ServiceEndpoint.cs b/ServerOps.Application/DTOs/ServiceEndpoint.cs
++index 46e5226..0f0101d 100644
++--- a/ServerOps.Application/DTOs/ServiceEndpoint.cs
+++++ b/ServerOps.Application/DTOs/ServiceEndpoint.cs
++@@ -3,7 +3,7 @@ namespace ServerOps.Application.DTOs;
++ public sealed class ServiceEndpoint
++ {
++     public string ServiceName { get; init; } = string.Empty;
++-    public int Port { get; init; }
+++    public int? Port { get; init; }
++     public string? Hostname { get; init; }
++     public string? PublicUrl { get; init; }
++     public bool IsExposed { get; init; }
++diff --git a/ServerOps.Application/Services/EndpointService.cs b/ServerOps.Application/Services/EndpointService.cs
++index 4514e75..1e740ab 100644
++--- a/ServerOps.Application/Services/EndpointService.cs
+++++ b/ServerOps.Application/Services/EndpointService.cs
++@@ -28,13 +28,14 @@ public sealed class EndpointService : IEndpointService
++ 
++         var mappingByService = mappings
++             .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ServiceName))
++-            .ToDictionary(mapping => mapping.ServiceName, StringComparer.OrdinalIgnoreCase);
+++            .ToDictionary(mapping => Normalize(mapping.ServiceName), StringComparer.OrdinalIgnoreCase);
++ 
++         return topology
++             .Select(service =>
++             {
++-                mappingByService.TryGetValue(service.ServiceName, out var mapping);
++-                var port = service.Ports.FirstOrDefault();
+++                var key = Normalize(service.ServiceName);
+++                mappingByService.TryGetValue(key, out var mapping);
+++                var port = service.Ports.Count > 0 ? service.Ports[0] : (int?)null;
++                 var hostname = string.IsNullOrWhiteSpace(mapping?.Hostname) ? null : mapping.Hostname;
++ 
++                 return new ServiceEndpoint
++@@ -49,4 +50,12 @@ public sealed class EndpointService : IEndpointService
++             .OrderBy(endpoint => endpoint.ServiceName, StringComparer.OrdinalIgnoreCase)
++             .ToList();
++     }
+++
+++    private static string Normalize(string name)
+++    {
+++        return name
+++            .Replace(".service", "", StringComparison.OrdinalIgnoreCase)
+++            .Trim()
+++            .ToLowerInvariant();
+++    }
++ }
++diff --git a/ServerOps.Application/Services/ExposureService.cs b/ServerOps.Application/Services/ExposureService.cs
++new file mode 100644
++index 0000000..c007df2
++--- /dev/null
+++++ b/ServerOps.Application/Services/ExposureService.cs
++@@ -0,0 +1,95 @@
+++using ServerOps.Application.Abstractions;
+++
+++namespace ServerOps.Application.Services;
+++
+++public sealed class ExposureService : IExposureService
+++{
+++    private readonly IAppTopologyService _appTopologyService;
+++    private readonly IEndpointRegistry _endpointRegistry;
+++    private readonly ICloudflaredService _cloudflaredService;
+++    private readonly ICloudflareDnsService _cloudflareDnsService;
+++    private readonly ICloudflaredConfigService _cloudflaredConfigService;
+++
+++    public ExposureService(
+++        IAppTopologyService appTopologyService,
+++        IEndpointRegistry endpointRegistry,
+++        ICloudflaredService cloudflaredService,
+++        ICloudflareDnsService cloudflareDnsService,
+++        ICloudflaredConfigService cloudflaredConfigService)
+++    {
+++        _appTopologyService = appTopologyService;
+++        _endpointRegistry = endpointRegistry;
+++        _cloudflaredService = cloudflaredService;
+++        _cloudflareDnsService = cloudflareDnsService;
+++        _cloudflaredConfigService = cloudflaredConfigService;
+++    }
+++
+++    public async Task ExposeAsync(string serviceName, string hostname, CancellationToken ct = default)
+++    {
+++        if (string.IsNullOrWhiteSpace(serviceName))
+++        {
+++            throw new ArgumentException("Service name is required.", nameof(serviceName));
+++        }
+++
+++        if (string.IsNullOrWhiteSpace(hostname))
+++        {
+++            throw new ArgumentException("Hostname is required.", nameof(hostname));
+++        }
+++
+++        var topology = await _appTopologyService.GetTopologyAsync(ct);
+++        var service = topology.FirstOrDefault(item =>
+++            string.Equals(item.ServiceName, serviceName, StringComparison.OrdinalIgnoreCase));
+++
+++        if (service is null)
+++        {
+++            throw new InvalidOperationException($"Service '{serviceName}' was not found.");
+++        }
+++
+++        if (service.Ports.Count == 0)
+++        {
+++            throw new InvalidOperationException($"Service '{serviceName}' has no listening ports.");
+++        }
+++
+++        var tunnelInfo = await _cloudflaredService.GetTunnelInfoAsync(ct);
+++        if (!tunnelInfo.IsRunning || string.IsNullOrWhiteSpace(tunnelInfo.TunnelId))
+++        {
+++            throw new InvalidOperationException("cloudflared tunnel is not running.");
+++        }
+++
+++        var port = service.Ports[0];
+++        var target = $"{tunnelInfo.TunnelId}.cfargotunnel.com";
+++
+++        await _cloudflareDnsService.EnsureCNameAsync(hostname.Trim(), target, ct);
+++        await _cloudflaredConfigService.AddIngressAsync(hostname.Trim(), port, ct);
+++        await _cloudflaredConfigService.ReloadAsync(ct);
+++        await _endpointRegistry.UpsertAsync(serviceName.Trim(), hostname.Trim(), ct);
+++    }
+++
+++    public async Task UpdateAsync(string serviceName, string newHostname, CancellationToken ct = default)
+++    {
+++        await UnexposeAsync(serviceName, ct);
+++        await ExposeAsync(serviceName, newHostname, ct);
+++    }
+++
+++    public async Task UnexposeAsync(string serviceName, CancellationToken ct = default)
+++    {
+++        if (string.IsNullOrWhiteSpace(serviceName))
+++        {
+++            return;
+++        }
+++
+++        var mappings = await _endpointRegistry.GetMappingsAsync(ct);
+++        var mapping = mappings.FirstOrDefault(item =>
+++            string.Equals(item.ServiceName?.Trim(), serviceName.Trim(), StringComparison.OrdinalIgnoreCase));
+++
+++        if (string.IsNullOrWhiteSpace(mapping?.Hostname))
+++        {
+++            return;
+++        }
+++
+++        await _cloudflareDnsService.DeleteAsync(mapping.Hostname, ct);
+++        await _cloudflaredConfigService.RemoveIngressAsync(mapping.Hostname, ct);
+++        await _cloudflaredConfigService.ReloadAsync(ct);
+++        await _endpointRegistry.RemoveAsync(serviceName.Trim(), ct);
+++    }
+++}
++diff --git a/ServerOps.Infrastructure.Tests/CloudflaredConfigServiceTests.cs b/ServerOps.Infrastructure.Tests/CloudflaredConfigServiceTests.cs
++new file mode 100644
++index 0000000..708856f
++--- /dev/null
+++++ b/ServerOps.Infrastructure.Tests/CloudflaredConfigServiceTests.cs
++@@ -0,0 +1,115 @@
+++using System.Text;
+++using ServerOps.Application.Abstractions;
+++using ServerOps.Application.DTOs;
+++using ServerOps.Domain.Entities;
+++using ServerOps.Infrastructure.CloudflareTunnel;
+++using Xunit;
+++
+++namespace ServerOps.Infrastructure.Tests;
+++
+++public sealed class CloudflaredConfigServiceTests
+++{
+++    [Fact]
+++    public async Task AddIngressAsync_Duplicate_Hostname_Does_Not_Insert_Duplicate()
+++    {
+++        var initialConfig = """
+++tunnel: test-tunnel
+++ingress:
+++- hostname: phoebus.local
+++  service: http://localhost:5000
+++- service: http_status:404
+++""";
+++
+++        var fileSystem = new FakeFileSystem(initialConfig);
+++        var service = new CloudflaredConfigService(
+++            new FakeCloudflaredService(new TunnelInfo { ConfigPath = "/etc/cloudflared/config.yml" }),
+++            fileSystem,
+++            new FakeCommandRunner());
+++
+++        await service.AddIngressAsync("phoebus.local", 5000);
+++
+++        Assert.Equal(initialConfig, fileSystem.Contents);
+++    }
+++
+++    [Fact]
+++    public async Task RemoveIngressAsync_Removes_Existing_Hostname_Block()
+++    {
+++        var initialConfig = """
+++tunnel: test-tunnel
+++ingress:
+++- hostname: phoebus.local
+++  service: http://localhost:5000
+++- hostname: ocr.local
+++  service: http://localhost:5050
+++- service: http_status:404
+++""";
+++
+++        var expectedConfig = """
+++tunnel: test-tunnel
+++ingress:
+++- hostname: ocr.local
+++  service: http://localhost:5050
+++- service: http_status:404
+++""" + Environment.NewLine;
+++
+++        var fileSystem = new FakeFileSystem(initialConfig);
+++        var service = new CloudflaredConfigService(
+++            new FakeCloudflaredService(new TunnelInfo { ConfigPath = "/etc/cloudflared/config.yml" }),
+++            fileSystem,
+++            new FakeCommandRunner());
+++
+++        await service.RemoveIngressAsync("phoebus.local");
+++
+++        Assert.Equal(NormalizeLineEndings(expectedConfig), NormalizeLineEndings(fileSystem.Contents));
+++    }
+++
+++    private static string NormalizeLineEndings(string value)
+++        => value.Replace("\r\n", "\n", StringComparison.Ordinal);
+++
+++    private sealed class FakeCloudflaredService : ICloudflaredService
+++    {
+++        private readonly TunnelInfo _tunnelInfo;
+++
+++        public FakeCloudflaredService(TunnelInfo tunnelInfo)
+++        {
+++            _tunnelInfo = tunnelInfo;
+++        }
+++
+++        public Task<bool> IsInstalledAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+++        public Task<bool> IsRunningAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+++        public Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo);
+++        public Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+++        public Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+++    }
+++
+++    private sealed class FakeFileSystem : IFileSystem
+++    {
+++        public string Contents { get; private set; }
+++
+++        public FakeFileSystem(string contents)
+++        {
+++            Contents = contents;
+++        }
+++
+++        public string Combine(params string[] paths) => string.Join("/", paths);
+++        public string GetTempPath() => "/tmp";
+++        public bool FileExists(string path) => true;
+++        public bool DirectoryExists(string path) => false;
+++        public void CreateDirectory(string path) { }
+++        public void DeleteDirectory(string path, bool recursive) { }
+++        public void MoveDirectory(string sourcePath, string destinationPath) { }
+++        public void CopyDirectory(string sourcePath, string destinationPath, bool overwrite) { }
+++        public Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default)
+++        {
+++            Contents = Encoding.UTF8.GetString(bytes);
+++            return Task.CompletedTask;
+++        }
+++        public Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default) => Task.FromResult(Contents);
+++    }
+++
+++    private sealed class FakeCommandRunner : ICommandRunner
+++    {
+++        public Task<CommandResult> RunAsync(CommandRequest request, CancellationToken cancellationToken = default)
+++            => Task.FromResult(new CommandResult { ExitCode = 0 });
+++    }
+++}
++diff --git a/ServerOps.Infrastructure/CloudflareTunnel/CloudflareDnsService.cs b/ServerOps.Infrastructure/CloudflareTunnel/CloudflareDnsService.cs
++new file mode 100644
++index 0000000..05a95d1
++--- /dev/null
+++++ b/ServerOps.Infrastructure/CloudflareTunnel/CloudflareDnsService.cs
++@@ -0,0 +1,126 @@
+++using System.Text;
+++using System.Text.Json;
+++using ServerOps.Application.Abstractions;
+++
+++namespace ServerOps.Infrastructure.CloudflareTunnel;
+++
+++public sealed class CloudflareDnsService : ICloudflareDnsService
+++{
+++    private const string BaseUrl = "https://api.cloudflare.com/client/v4";
+++    private readonly HttpClient _httpClient;
+++
+++    public CloudflareDnsService(HttpClient httpClient)
+++    {
+++        _httpClient = httpClient;
+++    }
+++
+++    public async Task EnsureCNameAsync(string hostname, string target, CancellationToken ct = default)
+++    {
+++        if (await ExistsAsync(hostname, ct))
+++        {
+++            return;
+++        }
+++
+++        var token = GetRequiredEnvironmentVariable("CLOUDFLARE_API_TOKEN");
+++        var zoneId = GetRequiredEnvironmentVariable("CLOUDFLARE_ZONE_ID");
+++
+++        using var request = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/zones/{zoneId}/dns_records");
+++        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+++        request.Content = new StringContent(
+++            JsonSerializer.Serialize(new
+++            {
+++                type = "CNAME",
+++                name = hostname,
+++                content = target
+++            }),
+++            Encoding.UTF8,
+++            "application/json");
+++
+++        using var response = await _httpClient.SendAsync(request, ct);
+++        response.EnsureSuccessStatusCode();
+++    }
+++
+++    public async Task<bool> ExistsAsync(string hostname, CancellationToken ct = default)
+++    {
+++        var token = GetRequiredEnvironmentVariable("CLOUDFLARE_API_TOKEN");
+++        var zoneId = GetRequiredEnvironmentVariable("CLOUDFLARE_ZONE_ID");
+++
+++        var encodedHostname = Uri.EscapeDataString(hostname);
+++        using var request = new HttpRequestMessage(
+++            HttpMethod.Get,
+++            $"{BaseUrl}/zones/{zoneId}/dns_records?type=CNAME&name={encodedHostname}");
+++        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+++
+++        using var response = await _httpClient.SendAsync(request, ct);
+++        response.EnsureSuccessStatusCode();
+++
+++        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+++        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+++        if (!document.RootElement.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array)
+++        {
+++            return false;
+++        }
+++
+++        return result.GetArrayLength() > 0;
+++    }
+++
+++    public async Task DeleteAsync(string hostname, CancellationToken ct = default)
+++    {
+++        if (string.IsNullOrWhiteSpace(hostname))
+++        {
+++            return;
+++        }
+++
+++        var token = GetRequiredEnvironmentVariable("CLOUDFLARE_API_TOKEN");
+++        var zoneId = GetRequiredEnvironmentVariable("CLOUDFLARE_ZONE_ID");
+++        var encodedHostname = Uri.EscapeDataString(hostname);
+++
+++        using var listRequest = new HttpRequestMessage(
+++            HttpMethod.Get,
+++            $"{BaseUrl}/zones/{zoneId}/dns_records?type=CNAME&name={encodedHostname}");
+++        listRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+++
+++        using var listResponse = await _httpClient.SendAsync(listRequest, ct);
+++        listResponse.EnsureSuccessStatusCode();
+++
+++        await using var stream = await listResponse.Content.ReadAsStreamAsync(ct);
+++        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+++        if (!document.RootElement.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Array)
+++        {
+++            return;
+++        }
+++
+++        foreach (var item in result.EnumerateArray())
+++        {
+++            if (!item.TryGetProperty("id", out var idProperty))
+++            {
+++                continue;
+++            }
+++
+++            var id = idProperty.GetString();
+++            if (string.IsNullOrWhiteSpace(id))
+++            {
+++                continue;
+++            }
+++
+++            using var deleteRequest = new HttpRequestMessage(
+++                HttpMethod.Delete,
+++                $"{BaseUrl}/zones/{zoneId}/dns_records/{id}");
+++            deleteRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+++
+++            using var deleteResponse = await _httpClient.SendAsync(deleteRequest, ct);
+++            deleteResponse.EnsureSuccessStatusCode();
+++        }
+++    }
+++
+++    private static string GetRequiredEnvironmentVariable(string name)
+++    {
+++        var value = Environment.GetEnvironmentVariable(name);
+++        if (string.IsNullOrWhiteSpace(value))
+++        {
+++            throw new InvalidOperationException($"Environment variable '{name}' is required.");
+++        }
+++
+++        return value;
+++    }
+++}
++diff --git a/ServerOps.Infrastructure/CloudflareTunnel/CloudflaredConfigService.cs b/ServerOps.Infrastructure/CloudflareTunnel/CloudflaredConfigService.cs
++new file mode 100644
++index 0000000..8fd1098
++--- /dev/null
+++++ b/ServerOps.Infrastructure/CloudflareTunnel/CloudflaredConfigService.cs
++@@ -0,0 +1,121 @@
+++using System.Text;
+++using ServerOps.Application.Abstractions;
+++using ServerOps.Application.DTOs;
+++
+++namespace ServerOps.Infrastructure.CloudflareTunnel;
+++
+++public sealed class CloudflaredConfigService : ICloudflaredConfigService
+++{
+++    private readonly ICloudflaredService _cloudflaredService;
+++    private readonly IFileSystem _fileSystem;
+++    private readonly ICommandRunner _commandRunner;
+++
+++    public CloudflaredConfigService(
+++        ICloudflaredService cloudflaredService,
+++        IFileSystem fileSystem,
+++        ICommandRunner commandRunner)
+++    {
+++        _cloudflaredService = cloudflaredService;
+++        _fileSystem = fileSystem;
+++        _commandRunner = commandRunner;
+++    }
+++
+++    public async Task AddIngressAsync(string hostname, int port, CancellationToken ct = default)
+++    {
+++        if (string.IsNullOrWhiteSpace(hostname))
+++        {
+++            throw new ArgumentException("Hostname is required.", nameof(hostname));
+++        }
+++
+++        if (port <= 0)
+++        {
+++            throw new ArgumentException("Port must be greater than zero.", nameof(port));
+++        }
+++
+++        var tunnelInfo = await _cloudflaredService.GetTunnelInfoAsync(ct);
+++        if (string.IsNullOrWhiteSpace(tunnelInfo.ConfigPath))
+++        {
+++            throw new InvalidOperationException("cloudflared config path is not available.");
+++        }
+++
+++        var configPath = tunnelInfo.ConfigPath;
+++        var contents = _fileSystem.FileExists(configPath)
+++            ? await _fileSystem.ReadAllTextAsync(configPath, ct)
+++            : string.Empty;
+++
+++        if (contents.Contains($"hostname: {hostname}", StringComparison.OrdinalIgnoreCase))
+++        {
+++            return;
+++        }
+++
+++        const string fallbackLine = "- service: http_status:404";
+++        var ingressBlock = $"- hostname: {hostname}{Environment.NewLine}  service: http://localhost:{port}{Environment.NewLine}";
+++
+++        string updatedContents;
+++        var fallbackIndex = contents.IndexOf(fallbackLine, StringComparison.Ordinal);
+++        if (fallbackIndex >= 0)
+++        {
+++            updatedContents = contents.Insert(fallbackIndex, ingressBlock);
+++        }
+++        else
+++        {
+++            var prefix = string.IsNullOrWhiteSpace(contents) ? string.Empty : contents.TrimEnd() + Environment.NewLine;
+++            updatedContents = $"{prefix}{ingressBlock}{fallbackLine}{Environment.NewLine}";
+++        }
+++
+++        await _fileSystem.WriteAllBytesAsync(configPath, Encoding.UTF8.GetBytes(updatedContents), ct);
+++    }
+++
+++    public async Task RemoveIngressAsync(string hostname, CancellationToken ct = default)
+++    {
+++        if (string.IsNullOrWhiteSpace(hostname))
+++        {
+++            return;
+++        }
+++
+++        var tunnelInfo = await _cloudflaredService.GetTunnelInfoAsync(ct);
+++        if (string.IsNullOrWhiteSpace(tunnelInfo.ConfigPath) || !_fileSystem.FileExists(tunnelInfo.ConfigPath))
+++        {
+++            return;
+++        }
+++
+++        var configPath = tunnelInfo.ConfigPath;
+++        var contents = await _fileSystem.ReadAllTextAsync(configPath, ct);
+++        var lines = contents.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
+++        var updatedLines = new List<string>();
+++        var hostnameLine = $"- hostname: {hostname}".Trim();
+++
+++        for (var i = 0; i < lines.Count; i++)
+++        {
+++            var line = lines[i];
+++            if (string.Equals(line.Trim(), hostnameLine, StringComparison.OrdinalIgnoreCase))
+++            {
+++                if (i + 1 < lines.Count && lines[i + 1].TrimStart().StartsWith("service:", StringComparison.OrdinalIgnoreCase))
+++                {
+++                    i++;
+++                }
+++
+++                continue;
+++            }
+++
+++            updatedLines.Add(line);
+++        }
+++
+++        var updatedContents = string.Join(Environment.NewLine, updatedLines).TrimEnd() + Environment.NewLine;
+++        await _fileSystem.WriteAllBytesAsync(configPath, Encoding.UTF8.GetBytes(updatedContents), ct);
+++    }
+++
+++    public async Task ReloadAsync(CancellationToken ct = default)
+++    {
+++        var result = await _commandRunner.RunAsync(new CommandRequest
+++        {
+++            Command = "systemctl",
+++            Arguments = ["restart", "cloudflared"]
+++        }, ct);
+++
+++        if (!result.Succeeded)
+++        {
+++            throw new InvalidOperationException("Failed to reload cloudflared.");
+++        }
+++    }
+++}
++diff --git a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
++index 0acf84c..19cedaa 100644
++--- a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+++++ b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
++@@ -37,6 +37,7 @@ public static class InfrastructureServiceCollectionExtensions
++         services.AddSingleton<IServiceControlService, ServiceControlService>();
++         services.AddSingleton<IPortService, PortService>();
++         services.AddSingleton<ICloudflaredService, CloudflaredService>();
+++        services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
++         services.AddSingleton<IDeploymentService, DeploymentService>();
++         services.AddSingleton<AzureTableAppRegistry>();
++         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
++@@ -44,7 +45,9 @@ public static class InfrastructureServiceCollectionExtensions
++         services.AddSingleton<IAppTopologyService, AppTopologyService>();
++         services.AddSingleton<IEndpointRegistry, InMemoryEndpointRegistry>();
++         services.AddSingleton<IEndpointService, EndpointService>();
+++        services.AddSingleton<IExposureService, ExposureService>();
++         services.AddSingleton<IAppCatalogService, AppCatalogService>();
+++        services.AddHttpClient<ICloudflareDnsService, CloudflareDnsService>();
++ 
++         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
++         {
++diff --git a/ServerOps.Infrastructure/Registry/InMemoryEndpointRegistry.cs b/ServerOps.Infrastructure/Registry/InMemoryEndpointRegistry.cs
++index 9abf3ad..91e50d8 100644
++--- a/ServerOps.Infrastructure/Registry/InMemoryEndpointRegistry.cs
+++++ b/ServerOps.Infrastructure/Registry/InMemoryEndpointRegistry.cs
++@@ -5,16 +5,50 @@ namespace ServerOps.Infrastructure.Registry;
++ 
++ public sealed class InMemoryEndpointRegistry : IEndpointRegistry
++ {
++-    private static readonly IReadOnlyList<EndpointMapping> Mappings =
++-    [
++-        new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" },
++-        new EndpointMapping { ServiceName = "ocr", Hostname = "ocr.local" },
++-        new EndpointMapping { ServiceName = "shared-a", Hostname = "shared-a.local" }
++-    ];
+++    private readonly Dictionary<string, EndpointMapping> _mappings = new(StringComparer.OrdinalIgnoreCase)
+++    {
+++        ["phoebus-api"] = new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" },
+++        ["ocr"] = new EndpointMapping { ServiceName = "ocr", Hostname = "ocr.local" },
+++        ["shared-a"] = new EndpointMapping { ServiceName = "shared-a", Hostname = "shared-a.local" }
+++    };
++ 
++     public Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default)
++     {
++         ct.ThrowIfCancellationRequested();
++-        return Task.FromResult(Mappings);
+++        IReadOnlyList<EndpointMapping> snapshot = _mappings.Values
+++            .OrderBy(item => item.ServiceName, StringComparer.OrdinalIgnoreCase)
+++            .ToList();
+++        return Task.FromResult(snapshot);
+++    }
+++
+++    public Task UpsertAsync(string serviceName, string hostname, CancellationToken ct = default)
+++    {
+++        ct.ThrowIfCancellationRequested();
+++
+++        if (string.IsNullOrWhiteSpace(serviceName) || string.IsNullOrWhiteSpace(hostname))
+++        {
+++            return Task.CompletedTask;
+++        }
+++
+++        _mappings[serviceName.Trim()] = new EndpointMapping
+++        {
+++            ServiceName = serviceName.Trim(),
+++            Hostname = hostname.Trim()
+++        };
+++
+++        return Task.CompletedTask;
+++    }
+++
+++    public Task RemoveAsync(string serviceName, CancellationToken ct = default)
+++    {
+++        ct.ThrowIfCancellationRequested();
+++
+++        if (string.IsNullOrWhiteSpace(serviceName))
+++        {
+++            return Task.CompletedTask;
+++        }
+++
+++        _mappings.Remove(serviceName.Trim());
+++        return Task.CompletedTask;
++     }
++ }
++diff --git a/ServerOps.Web/Components/Pages/Diagnostics.razor b/ServerOps.Web/Components/Pages/Diagnostics.razor
++index 56069c9..9f23d47 100644
++--- a/ServerOps.Web/Components/Pages/Diagnostics.razor
+++++ b/ServerOps.Web/Components/Pages/Diagnostics.razor
++@@ -3,6 +3,7 @@
++ @inject IPortService PortService
++ @inject IAppTopologyService AppTopologyService
++ @inject IEndpointService EndpointService
+++@inject IExposureService ExposureService
++ @inject IServiceControlService ServiceControlService
++ 
++ <PageTitle>Host Diagnostics</PageTitle>
++@@ -29,6 +30,7 @@ else
++                 <th>Name</th>
++                 <th>Status</th>
++                 <th>Actions</th>
+++                <th>Expose</th>
++             </tr>
++         </thead>
++         <tbody>
++@@ -42,6 +44,12 @@ else
++                         <button @onclick="() => RunActionAsync(service.Name, ServiceControlService.StopAsync)">Stop</button>
++                         <button @onclick="() => RunActionAsync(service.Name, ServiceControlService.RestartAsync)">Restart</button>
++                     </td>
+++                    <td class="actions">
+++                        <input value="@GetHostname(service.Name)" @oninput="e => SetHostname(service.Name, e.Value?.ToString())" />
+++                        <button @onclick="() => ExposeAsync(service.Name)">Expose</button>
+++                        <button @onclick="() => UpdateAsync(service.Name)">Update</button>
+++                        <button @onclick="() => RemoveAsync(service.Name)">Remove</button>
+++                    </td>
++                 </tr>
++             }
++         </tbody>
++@@ -127,7 +135,7 @@ else
++             {
++                 <tr>
++                     <td>@endpoint.ServiceName</td>
++-                    <td>@(endpoint.Port == 0 ? "-" : endpoint.Port)</td>
+++                    <td>@(endpoint.Port?.ToString() ?? "-")</td>
++                     <td>@(string.IsNullOrWhiteSpace(endpoint.PublicUrl) ? "-" : endpoint.PublicUrl)</td>
++                     <td>@(endpoint.IsExposed ? "Exposed" : "Not Exposed")</td>
++                 </tr>
++@@ -142,6 +150,7 @@ else
++     private List<PortInfo> _ports = [];
++     private List<ServiceTopology> _topology = [];
++     private List<ServiceEndpoint> _endpoints = [];
+++    private Dictionary<string, string> _hostnames = new(StringComparer.OrdinalIgnoreCase);
++     private string _message = string.Empty;
++ 
++     protected override async Task OnInitializedAsync()
++@@ -164,4 +173,57 @@ else
++         _message = $"ExitCode: {result.ExitCode} | StdOut: {result.StdOut} | StdErr: {result.StdErr}";
++         await LoadAsync();
++     }
+++
+++    private string GetHostname(string serviceName)
+++        => _hostnames.TryGetValue(serviceName, out var hostname) ? hostname : string.Empty;
+++
+++    private void SetHostname(string serviceName, string? hostname)
+++    {
+++        _hostnames[serviceName] = hostname ?? string.Empty;
+++    }
+++
+++    private async Task ExposeAsync(string serviceName)
+++    {
+++        try
+++        {
+++            await ExposureService.ExposeAsync(serviceName, GetHostname(serviceName), CancellationToken.None);
+++            _message = $"Exposure configured for {serviceName}.";
+++        }
+++        catch (Exception ex)
+++        {
+++            _message = ex.Message;
+++        }
+++
+++        await LoadAsync();
+++    }
+++
+++    private async Task UpdateAsync(string serviceName)
+++    {
+++        try
+++        {
+++            await ExposureService.UpdateAsync(serviceName, GetHostname(serviceName), CancellationToken.None);
+++            _message = $"Exposure updated for {serviceName}.";
+++        }
+++        catch (Exception ex)
+++        {
+++            _message = ex.Message;
+++        }
+++
+++        await LoadAsync();
+++    }
+++
+++    private async Task RemoveAsync(string serviceName)
+++    {
+++        try
+++        {
+++            await ExposureService.UnexposeAsync(serviceName, CancellationToken.None);
+++            _message = $"Exposure removed for {serviceName}.";
+++        }
+++        catch (Exception ex)
+++        {
+++            _message = ex.Message;
+++        }
+++
+++        await LoadAsync();
+++    }
++ }
++diff --git a/module7.txt b/module7.txt
++new file mode 100644
++index 0000000..9331679
++--- /dev/null
+++++ b/module7.txt
++@@ -0,0 +1,1045 @@
+++commit e0a437eb42c5d16a0097d83e04707f1c81a8d26a
+++Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
+++Date:   Mon Mar 23 04:15:23 2026 -0400
+++
+++    implement module 7
+++
+++diff --git a/ServerOps.Application.Tests/AppTopologyServiceTests.cs b/ServerOps.Application.Tests/AppTopologyServiceTests.cs
+++index 96db384..2cddd0f 100644
+++--- a/ServerOps.Application.Tests/AppTopologyServiceTests.cs
++++++ b/ServerOps.Application.Tests/AppTopologyServiceTests.cs
+++@@ -87,6 +87,49 @@ public sealed class AppTopologyServiceTests
+++         Assert.Empty(item.Ports);
+++     }
+++ 
++++    [Fact]
++++    public async Task GetTopologyAsync_Only_Includes_Running_Services()
++++    {
++++        var service = CreateService(
++++            new[]
++++            {
++++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 },
++++                new ServiceInfo { Name = "stopped-app", Status = ServiceStatus.Stopped, ProcessId = 456 }
++++            },
++++            new[]
++++            {
++++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" },
++++                new PortInfo { Port = 6000, ProcessId = 456, ProcessName = "stopped-app" }
++++            });
++++
++++        var topology = await service.GetTopologyAsync();
++++
++++        var item = Assert.Single(topology);
++++        Assert.Equal("phoebus", item.ServiceName);
++++    }
++++
++++    [Fact]
++++    public async Task GetTopologyAsync_Handles_Multiple_Services_Sharing_Same_Pid()
++++    {
++++        var service = CreateService(
++++            new[]
++++            {
++++                new ServiceInfo { Name = "shared-a", Status = ServiceStatus.Running, ProcessId = 123 },
++++                new ServiceInfo { Name = "shared-b", Status = ServiceStatus.Running, ProcessId = 123 }
++++            },
++++            new[]
++++            {
++++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "shared" },
++++                new PortInfo { Port = 5001, ProcessId = 123, ProcessName = "shared" }
++++            });
++++
++++        var topology = await service.GetTopologyAsync();
++++
++++        Assert.Equal(2, topology.Count);
++++        Assert.Equal(new[] { 5000, 5001 }, topology[0].Ports);
++++        Assert.Equal(new[] { 5000, 5001 }, topology[1].Ports);
++++    }
++++
+++     private static AppTopologyService CreateService(IReadOnlyList<ServiceInfo> services, IReadOnlyList<PortInfo> ports)
+++     {
+++         return new AppTopologyService(new FakeHostService(services), new FakePortService(ports));
+++diff --git a/ServerOps.Application.Tests/EndpointServiceTests.cs b/ServerOps.Application.Tests/EndpointServiceTests.cs
+++new file mode 100644
+++index 0000000..dd42179
+++--- /dev/null
++++++ b/ServerOps.Application.Tests/EndpointServiceTests.cs
+++@@ -0,0 +1,129 @@
++++using ServerOps.Application.Abstractions;
++++using ServerOps.Application.DTOs;
++++using ServerOps.Application.Models;
++++using ServerOps.Application.Services;
++++using ServerOps.Domain.Entities;
++++using Xunit;
++++
++++namespace ServerOps.Application.Tests;
++++
++++public sealed class EndpointServiceTests
++++{
++++    [Fact]
++++    public async Task GetEndpointsAsync_Returns_PublicUrl_For_Mapped_Service()
++++    {
++++        var service = CreateService(
++++            [new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000] }],
++++            [new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" }],
++++            new TunnelInfo { IsRunning = true });
++++
++++        var endpoints = await service.GetEndpointsAsync();
++++
++++        var endpoint = Assert.Single(endpoints);
++++        Assert.Equal("phoebus.local", endpoint.Hostname);
++++        Assert.Equal("https://phoebus.local", endpoint.PublicUrl);
++++        Assert.True(endpoint.IsExposed);
++++    }
++++
++++    [Fact]
++++    public async Task GetEndpointsAsync_Returns_Null_Url_For_Unmapped_Service()
++++    {
++++        var service = CreateService(
++++            [new ServiceTopology { ServiceName = "unmapped", Ports = [5000] }],
++++            [],
++++            new TunnelInfo { IsRunning = true });
++++
++++        var endpoints = await service.GetEndpointsAsync();
++++
++++        var endpoint = Assert.Single(endpoints);
++++        Assert.Null(endpoint.PublicUrl);
++++        Assert.False(endpoint.IsExposed);
++++    }
++++
++++    [Fact]
++++    public async Task GetEndpointsAsync_Uses_First_Port_When_Multiple_Ports_Exist()
++++    {
++++        var service = CreateService(
++++            [new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000, 5001] }],
++++            [new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" }],
++++            new TunnelInfo { IsRunning = true });
++++
++++        var endpoints = await service.GetEndpointsAsync();
++++
++++        var endpoint = Assert.Single(endpoints);
++++        Assert.Equal(5000, endpoint.Port);
++++    }
++++
++++    [Fact]
++++    public async Task GetEndpointsAsync_Returns_Not_Exposed_When_Tunnel_Is_Down()
++++    {
++++        var service = CreateService(
++++            [new ServiceTopology { ServiceName = "phoebus-api", Ports = [5000] }],
++++            [new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" }],
++++            new TunnelInfo { IsRunning = false });
++++
++++        var endpoints = await service.GetEndpointsAsync();
++++
++++        var endpoint = Assert.Single(endpoints);
++++        Assert.False(endpoint.IsExposed);
++++    }
++++
++++    private static EndpointService CreateService(
++++        IReadOnlyList<ServiceTopology> topology,
++++        IReadOnlyList<EndpointMapping> mappings,
++++        TunnelInfo tunnelInfo)
++++    {
++++        return new EndpointService(
++++            new FakeTopologyService(topology),
++++            new FakeEndpointRegistry(mappings),
++++            new FakeCloudflaredService(tunnelInfo));
++++    }
++++
++++    private sealed class FakeTopologyService : IAppTopologyService
++++    {
++++        private readonly IReadOnlyList<ServiceTopology> _topology;
++++
++++        public FakeTopologyService(IReadOnlyList<ServiceTopology> topology)
++++        {
++++            _topology = topology;
++++        }
++++
++++        public Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default)
++++            => Task.FromResult(_topology);
++++    }
++++
++++    private sealed class FakeEndpointRegistry : IEndpointRegistry
++++    {
++++        private readonly IReadOnlyList<EndpointMapping> _mappings;
++++
++++        public FakeEndpointRegistry(IReadOnlyList<EndpointMapping> mappings)
++++        {
++++            _mappings = mappings;
++++        }
++++
++++        public Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default)
++++            => Task.FromResult(_mappings);
++++    }
++++
++++    private sealed class FakeCloudflaredService : ICloudflaredService
++++    {
++++        private readonly TunnelInfo _tunnelInfo;
++++
++++        public FakeCloudflaredService(TunnelInfo tunnelInfo)
++++        {
++++            _tunnelInfo = tunnelInfo;
++++        }
++++
++++        public Task<bool> IsInstalledAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
++++
++++        public Task<bool> IsRunningAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo.IsRunning);
++++
++++        public Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo);
++++
++++        public Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default)
++++            => Task.FromResult(new CommandResult());
++++
++++        public Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default)
++++            => Task.FromResult(new CommandResult());
++++    }
++++}
+++diff --git a/ServerOps.Application/Abstractions/IEndpointRegistry.cs b/ServerOps.Application/Abstractions/IEndpointRegistry.cs
+++new file mode 100644
+++index 0000000..1a98b45
+++--- /dev/null
++++++ b/ServerOps.Application/Abstractions/IEndpointRegistry.cs
+++@@ -0,0 +1,8 @@
++++using ServerOps.Application.Models;
++++
++++namespace ServerOps.Application.Abstractions;
++++
++++public interface IEndpointRegistry
++++{
++++    Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default);
++++}
+++diff --git a/ServerOps.Application/Abstractions/IEndpointService.cs b/ServerOps.Application/Abstractions/IEndpointService.cs
+++new file mode 100644
+++index 0000000..2a298af
+++--- /dev/null
++++++ b/ServerOps.Application/Abstractions/IEndpointService.cs
+++@@ -0,0 +1,8 @@
++++using ServerOps.Application.DTOs;
++++
++++namespace ServerOps.Application.Abstractions;
++++
++++public interface IEndpointService
++++{
++++    Task<IReadOnlyList<ServiceEndpoint>> GetEndpointsAsync(CancellationToken ct = default);
++++}
+++diff --git a/ServerOps.Application/DTOs/ServiceEndpoint.cs b/ServerOps.Application/DTOs/ServiceEndpoint.cs
+++new file mode 100644
+++index 0000000..46e5226
+++--- /dev/null
++++++ b/ServerOps.Application/DTOs/ServiceEndpoint.cs
+++@@ -0,0 +1,10 @@
++++namespace ServerOps.Application.DTOs;
++++
++++public sealed class ServiceEndpoint
++++{
++++    public string ServiceName { get; init; } = string.Empty;
++++    public int Port { get; init; }
++++    public string? Hostname { get; init; }
++++    public string? PublicUrl { get; init; }
++++    public bool IsExposed { get; init; }
++++}
+++diff --git a/ServerOps.Application/Models/EndpointMapping.cs b/ServerOps.Application/Models/EndpointMapping.cs
+++new file mode 100644
+++index 0000000..980924a
+++--- /dev/null
++++++ b/ServerOps.Application/Models/EndpointMapping.cs
+++@@ -0,0 +1,7 @@
++++namespace ServerOps.Application.Models;
++++
++++public sealed record EndpointMapping
++++{
++++    public string ServiceName { get; init; } = string.Empty;
++++    public string Hostname { get; init; } = string.Empty;
++++}
+++diff --git a/ServerOps.Application/Services/AppTopologyService.cs b/ServerOps.Application/Services/AppTopologyService.cs
+++index fe4942f..5a881ae 100644
+++--- a/ServerOps.Application/Services/AppTopologyService.cs
++++++ b/ServerOps.Application/Services/AppTopologyService.cs
+++@@ -18,13 +18,21 @@ public sealed class AppTopologyService : IAppTopologyService
+++     {
+++         var services = await _hostService.GetServicesAsync(ct);
+++         var ports = await _portService.GetListeningPortsAsync(ct);
++++        var portsByProcessId = ports
++++            .Where(port => port.ProcessId.HasValue)
++++            .GroupBy(port => port.ProcessId!.Value)
++++            .ToDictionary(
++++                group => group.Key,
++++                group => (IReadOnlyList<int>)group.Select(port => port.Port).Distinct().Order().ToList());
+++ 
+++         return services
++++            .Where(service => service.Status == Domain.Enums.ServiceStatus.Running)
+++             .Select(service =>
+++             {
+++                 var matchedPorts = service.ProcessId is int pid
+++-                    ? ports.Where(port => port.ProcessId == pid).Select(port => port.Port).Distinct().Order().ToList()
+++-                    : [];
++++                    && portsByProcessId.TryGetValue(pid, out var servicePorts)
++++                        ? servicePorts
++++                        : Array.Empty<int>();
+++ 
+++                 return new ServiceTopology
+++                 {
+++diff --git a/ServerOps.Application/Services/EndpointService.cs b/ServerOps.Application/Services/EndpointService.cs
+++new file mode 100644
+++index 0000000..4514e75
+++--- /dev/null
++++++ b/ServerOps.Application/Services/EndpointService.cs
+++@@ -0,0 +1,52 @@
++++using ServerOps.Application.Abstractions;
++++using ServerOps.Application.DTOs;
++++using ServerOps.Application.Models;
++++
++++namespace ServerOps.Application.Services;
++++
++++public sealed class EndpointService : IEndpointService
++++{
++++    private readonly IAppTopologyService _appTopologyService;
++++    private readonly IEndpointRegistry _endpointRegistry;
++++    private readonly ICloudflaredService _cloudflaredService;
++++
++++    public EndpointService(
++++        IAppTopologyService appTopologyService,
++++        IEndpointRegistry endpointRegistry,
++++        ICloudflaredService cloudflaredService)
++++    {
++++        _appTopologyService = appTopologyService;
++++        _endpointRegistry = endpointRegistry;
++++        _cloudflaredService = cloudflaredService;
++++    }
++++
++++    public async Task<IReadOnlyList<ServiceEndpoint>> GetEndpointsAsync(CancellationToken ct = default)
++++    {
++++        var topology = await _appTopologyService.GetTopologyAsync(ct);
++++        var mappings = await _endpointRegistry.GetMappingsAsync(ct);
++++        var tunnelInfo = await _cloudflaredService.GetTunnelInfoAsync(ct);
++++
++++        var mappingByService = mappings
++++            .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ServiceName))
++++            .ToDictionary(mapping => mapping.ServiceName, StringComparer.OrdinalIgnoreCase);
++++
++++        return topology
++++            .Select(service =>
++++            {
++++                mappingByService.TryGetValue(service.ServiceName, out var mapping);
++++                var port = service.Ports.FirstOrDefault();
++++                var hostname = string.IsNullOrWhiteSpace(mapping?.Hostname) ? null : mapping.Hostname;
++++
++++                return new ServiceEndpoint
++++                {
++++                    ServiceName = service.ServiceName,
++++                    Port = port,
++++                    Hostname = hostname,
++++                    PublicUrl = hostname is null ? null : $"https://{hostname}",
++++                    IsExposed = hostname is not null && tunnelInfo.IsRunning
++++                };
++++            })
++++            .OrderBy(endpoint => endpoint.ServiceName, StringComparer.OrdinalIgnoreCase)
++++            .ToList();
++++    }
++++}
+++diff --git a/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs b/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
+++index 2701b7f..9d2bc91 100644
+++--- a/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
++++++ b/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
+++@@ -36,6 +36,28 @@ broken.service loaded failed failed Broken service
+++         Assert.Equal(4321, pid);
+++     }
+++ 
++++    [Fact]
++++    public void ParseServicePidMap_Returns_Service_To_Pid_Map()
++++    {
++++        const string output = """
++++Id=cron.service
++++MainPID=111
++++
++++Id=ssh.service
++++MainPID=0
++++
++++Id=broken.service
++++MainPID=999
++++""";
++++
++++        var pidMap = LinuxServiceParser.ParseServicePidMap(output);
++++
++++        Assert.Equal(3, pidMap.Count);
++++        Assert.Equal(111, pidMap["cron.service"]);
++++        Assert.Null(pidMap["ssh.service"]);
++++        Assert.Equal(999, pidMap["broken.service"]);
++++    }
++++
+++     [Fact]
+++     public void Parse_Returns_Empty_For_Empty_Output()
+++     {
+++diff --git a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+++index 2153c4e..0acf84c 100644
+++--- a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
++++++ b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+++@@ -42,6 +42,8 @@ public static class InfrastructureServiceCollectionExtensions
+++         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
+++         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();
+++         services.AddSingleton<IAppTopologyService, AppTopologyService>();
++++        services.AddSingleton<IEndpointRegistry, InMemoryEndpointRegistry>();
++++        services.AddSingleton<IEndpointService, EndpointService>();
+++         services.AddSingleton<IAppCatalogService, AppCatalogService>();
+++ 
+++         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
+++diff --git a/ServerOps.Infrastructure/Host/LinuxHostService.cs b/ServerOps.Infrastructure/Host/LinuxHostService.cs
+++index c8f4b2a..7eedfb4 100644
+++--- a/ServerOps.Infrastructure/Host/LinuxHostService.cs
++++++ b/ServerOps.Infrastructure/Host/LinuxHostService.cs
+++@@ -33,23 +33,24 @@ public sealed class LinuxHostService
+++             return services;
+++         }
+++ 
+++-        var enrichedServices = new List<ServiceInfo>(services.Count);
+++-
+++-        foreach (var service in services)
++++        var pidResult = await _commandRunner.RunAsync(new CommandRequest
+++         {
+++-            var mainPidResult = await _commandRunner.RunAsync(new CommandRequest
+++-            {
+++-                Command = "systemctl",
+++-                Arguments = ["show", service.Name, "--property", "MainPID"]
+++-            }, ct);
+++-
+++-            var processId = mainPidResult.Succeeded
+++-                ? LinuxServiceParser.ParseMainPid(mainPidResult.StdOut)
+++-                : null;
++++            Command = "systemctl",
++++            Arguments = ["show", "--type=service", "--property=Id,MainPID"]
++++        }, ct);
+++ 
+++-            enrichedServices.Add(service with { ProcessId = processId });
++++        if (!pidResult.Succeeded)
++++        {
++++            return services;
+++         }
+++ 
+++-        return enrichedServices;
++++        var pidMap = LinuxServiceParser.ParseServicePidMap(pidResult.StdOut);
++++
++++        return services
++++            .Select(service => service with
++++            {
++++                ProcessId = pidMap.TryGetValue(service.Name, out var pid) ? pid : null
++++            })
++++            .ToList();
+++     }
+++ }
+++diff --git a/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs b/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
+++index 886e856..4023732 100644
+++--- a/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
++++++ b/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
+++@@ -89,4 +89,57 @@ public static class LinuxServiceParser
+++ 
+++         return null;
+++     }
++++
++++    public static Dictionary<string, int?> ParseServicePidMap(string output)
++++    {
++++        var result = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
++++        if (string.IsNullOrWhiteSpace(output))
++++        {
++++            return result;
++++        }
++++
++++        string? serviceId = null;
++++        int? mainPid = null;
++++
++++        foreach (var rawLine in output.Split('\n'))
++++        {
++++            var line = rawLine.Trim();
++++
++++            if (string.IsNullOrWhiteSpace(line))
++++            {
++++                if (!string.IsNullOrWhiteSpace(serviceId))
++++                {
++++                    result[serviceId] = mainPid;
++++                }
++++
++++                serviceId = null;
++++                mainPid = null;
++++                continue;
++++            }
++++
++++            if (line.StartsWith("Id=", StringComparison.OrdinalIgnoreCase))
++++            {
++++                serviceId = line["Id=".Length..].Trim();
++++            }
++++            else if (line.StartsWith("MainPID=", StringComparison.OrdinalIgnoreCase))
++++            {
++++                var value = line["MainPID=".Length..].Trim();
++++                if (int.TryParse(value, out var pid) && pid > 0)
++++                {
++++                    mainPid = pid;
++++                }
++++                else
++++                {
++++                    mainPid = null;
++++                }
++++            }
++++        }
++++
++++        if (!string.IsNullOrWhiteSpace(serviceId))
++++        {
++++            result[serviceId] = mainPid;
++++        }
++++
++++        return result;
++++    }
+++ }
+++diff --git a/ServerOps.Infrastructure/Registry/InMemoryEndpointRegistry.cs b/ServerOps.Infrastructure/Registry/InMemoryEndpointRegistry.cs
+++new file mode 100644
+++index 0000000..9abf3ad
+++--- /dev/null
++++++ b/ServerOps.Infrastructure/Registry/InMemoryEndpointRegistry.cs
+++@@ -0,0 +1,20 @@
++++using ServerOps.Application.Abstractions;
++++using ServerOps.Application.Models;
++++
++++namespace ServerOps.Infrastructure.Registry;
++++
++++public sealed class InMemoryEndpointRegistry : IEndpointRegistry
++++{
++++    private static readonly IReadOnlyList<EndpointMapping> Mappings =
++++    [
++++        new EndpointMapping { ServiceName = "phoebus-api", Hostname = "phoebus.local" },
++++        new EndpointMapping { ServiceName = "ocr", Hostname = "ocr.local" },
++++        new EndpointMapping { ServiceName = "shared-a", Hostname = "shared-a.local" }
++++    ];
++++
++++    public Task<IReadOnlyList<EndpointMapping>> GetMappingsAsync(CancellationToken ct = default)
++++    {
++++        ct.ThrowIfCancellationRequested();
++++        return Task.FromResult(Mappings);
++++    }
++++}
+++diff --git a/ServerOps.Web/Components/Pages/Diagnostics.razor b/ServerOps.Web/Components/Pages/Diagnostics.razor
+++index 54f0792..56069c9 100644
+++--- a/ServerOps.Web/Components/Pages/Diagnostics.razor
++++++ b/ServerOps.Web/Components/Pages/Diagnostics.razor
+++@@ -2,6 +2,7 @@
+++ @inject IHostService HostService
+++ @inject IPortService PortService
+++ @inject IAppTopologyService AppTopologyService
++++@inject IEndpointService EndpointService
+++ @inject IServiceControlService ServiceControlService
+++ 
+++ <PageTitle>Host Diagnostics</PageTitle>
+++@@ -105,11 +106,42 @@ else
+++     </table>
+++ }
+++ 
++++@if (_endpoints.Count == 0)
++++{
++++    <p>No endpoint mappings discovered.</p>
++++}
++++else
++++{
++++    <h2>Endpoints</h2>
++++    <table class="data-grid">
++++        <thead>
++++            <tr>
++++                <th>Service</th>
++++                <th>Port</th>
++++                <th>URL</th>
++++                <th>Status</th>
++++            </tr>
++++        </thead>
++++        <tbody>
++++            @foreach (var endpoint in _endpoints)
++++            {
++++                <tr>
++++                    <td>@endpoint.ServiceName</td>
++++                    <td>@(endpoint.Port == 0 ? "-" : endpoint.Port)</td>
++++                    <td>@(string.IsNullOrWhiteSpace(endpoint.PublicUrl) ? "-" : endpoint.PublicUrl)</td>
++++                    <td>@(endpoint.IsExposed ? "Exposed" : "Not Exposed")</td>
++++                </tr>
++++            }
++++        </tbody>
++++    </table>
++++}
++++
+++ @code {
+++     private OsType _currentOs;
+++     private List<ServiceInfo> _services = [];
+++     private List<PortInfo> _ports = [];
+++     private List<ServiceTopology> _topology = [];
++++    private List<ServiceEndpoint> _endpoints = [];
+++     private string _message = string.Empty;
+++ 
+++     protected override async Task OnInitializedAsync()
+++@@ -123,6 +155,7 @@ else
+++         _services = (await HostService.GetServicesAsync()).ToList();
+++         _ports = (await PortService.GetListeningPortsAsync()).OrderBy(x => x.Port).ToList();
+++         _topology = (await AppTopologyService.GetTopologyAsync()).ToList();
++++        _endpoints = (await EndpointService.GetEndpointsAsync()).ToList();
+++     }
+++ 
+++     private async Task RunActionAsync(string serviceName, Func<string, CancellationToken, Task<CommandResult>> action)
+++diff --git a/module6.txt b/module6.txt
+++new file mode 100644
+++index 0000000..a7cdc8c
+++--- /dev/null
++++++ b/module6.txt
+++@@ -0,0 +1,461 @@
++++commit ebc4bc300da5de7a3ac09960cb1e3c1cf21627f9
++++Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
++++Date:   Mon Mar 23 04:07:04 2026 -0400
++++
++++    module6
++++
++++diff --git a/ServerOps.Application.Tests/AppTopologyServiceTests.cs b/ServerOps.Application.Tests/AppTopologyServiceTests.cs
++++new file mode 100644
++++index 0000000..96db384
++++--- /dev/null
+++++++ b/ServerOps.Application.Tests/AppTopologyServiceTests.cs
++++@@ -0,0 +1,122 @@
+++++using ServerOps.Application.Abstractions;
+++++using ServerOps.Application.DTOs;
+++++using ServerOps.Application.Services;
+++++using ServerOps.Domain.Entities;
+++++using ServerOps.Domain.Enums;
+++++using Xunit;
+++++
+++++namespace ServerOps.Application.Tests;
+++++
+++++public sealed class AppTopologyServiceTests
+++++{
+++++    [Fact]
+++++    public async Task GetTopologyAsync_Matches_Single_Port_By_ProcessId()
+++++    {
+++++        var service = CreateService(
+++++            new[]
+++++            {
+++++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 }
+++++            },
+++++            new[]
+++++            {
+++++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" }
+++++            });
+++++
+++++        var topology = await service.GetTopologyAsync();
+++++
+++++        var item = Assert.Single(topology);
+++++        Assert.Equal("phoebus", item.ServiceName);
+++++        Assert.Equal(new[] { 5000 }, item.Ports);
+++++    }
+++++
+++++    [Fact]
+++++    public async Task GetTopologyAsync_Matches_Multiple_Ports_By_ProcessId()
+++++    {
+++++        var service = CreateService(
+++++            new[]
+++++            {
+++++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 }
+++++            },
+++++            new[]
+++++            {
+++++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" },
+++++                new PortInfo { Port = 5001, ProcessId = 123, ProcessName = "phoebus" }
+++++            });
+++++
+++++        var topology = await service.GetTopologyAsync();
+++++
+++++        var item = Assert.Single(topology);
+++++        Assert.Equal(new[] { 5000, 5001 }, item.Ports);
+++++    }
+++++
+++++    [Fact]
+++++    public async Task GetTopologyAsync_Returns_Empty_Ports_When_Service_Has_No_Pid()
+++++    {
+++++        var service = CreateService(
+++++            new[]
+++++            {
+++++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = null }
+++++            },
+++++            new[]
+++++            {
+++++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" }
+++++            });
+++++
+++++        var topology = await service.GetTopologyAsync();
+++++
+++++        var item = Assert.Single(topology);
+++++        Assert.Empty(item.Ports);
+++++    }
+++++
+++++    [Fact]
+++++    public async Task GetTopologyAsync_Ignores_Unmatched_Ports()
+++++    {
+++++        var service = CreateService(
+++++            new[]
+++++            {
+++++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 }
+++++            },
+++++            new[]
+++++            {
+++++                new PortInfo { Port = 6000, ProcessId = 999, ProcessName = "other" }
+++++            });
+++++
+++++        var topology = await service.GetTopologyAsync();
+++++
+++++        var item = Assert.Single(topology);
+++++        Assert.Empty(item.Ports);
+++++    }
+++++
+++++    private static AppTopologyService CreateService(IReadOnlyList<ServiceInfo> services, IReadOnlyList<PortInfo> ports)
+++++    {
+++++        return new AppTopologyService(new FakeHostService(services), new FakePortService(ports));
+++++    }
+++++
+++++    private sealed class FakeHostService : IHostService
+++++    {
+++++        private readonly IReadOnlyList<ServiceInfo> _services;
+++++
+++++        public FakeHostService(IReadOnlyList<ServiceInfo> services)
+++++        {
+++++            _services = services;
+++++        }
+++++
+++++        public OsType GetCurrentOs() => OsType.Linux;
+++++
+++++        public Task<IReadOnlyList<ServiceInfo>> GetServicesAsync(CancellationToken ct = default)
+++++            => Task.FromResult(_services);
+++++    }
+++++
+++++    private sealed class FakePortService : IPortService
+++++    {
+++++        private readonly IReadOnlyList<PortInfo> _ports;
+++++
+++++        public FakePortService(IReadOnlyList<PortInfo> ports)
+++++        {
+++++            _ports = ports;
+++++        }
+++++
+++++        public Task<IReadOnlyList<PortInfo>> GetListeningPortsAsync(CancellationToken cancellationToken = default)
+++++            => Task.FromResult(_ports);
+++++    }
+++++}
++++diff --git a/ServerOps.Application/Abstractions/IAppTopologyService.cs b/ServerOps.Application/Abstractions/IAppTopologyService.cs
++++new file mode 100644
++++index 0000000..7f0f77b
++++--- /dev/null
+++++++ b/ServerOps.Application/Abstractions/IAppTopologyService.cs
++++@@ -0,0 +1,8 @@
+++++using ServerOps.Application.DTOs;
+++++
+++++namespace ServerOps.Application.Abstractions;
+++++
+++++public interface IAppTopologyService
+++++{
+++++    Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default);
+++++}
++++diff --git a/ServerOps.Application/DTOs/ServiceTopology.cs b/ServerOps.Application/DTOs/ServiceTopology.cs
++++new file mode 100644
++++index 0000000..18a45a9
++++--- /dev/null
+++++++ b/ServerOps.Application/DTOs/ServiceTopology.cs
++++@@ -0,0 +1,11 @@
+++++using ServerOps.Domain.Enums;
+++++
+++++namespace ServerOps.Application.DTOs;
+++++
+++++public sealed class ServiceTopology
+++++{
+++++    public string ServiceName { get; init; } = string.Empty;
+++++    public ServiceStatus Status { get; init; } = ServiceStatus.Unknown;
+++++    public int? ProcessId { get; init; }
+++++    public IReadOnlyList<int> Ports { get; init; } = Array.Empty<int>();
+++++}
++++diff --git a/ServerOps.Application/Services/AppTopologyService.cs b/ServerOps.Application/Services/AppTopologyService.cs
++++new file mode 100644
++++index 0000000..fe4942f
++++--- /dev/null
+++++++ b/ServerOps.Application/Services/AppTopologyService.cs
++++@@ -0,0 +1,40 @@
+++++using ServerOps.Application.Abstractions;
+++++using ServerOps.Application.DTOs;
+++++
+++++namespace ServerOps.Application.Services;
+++++
+++++public sealed class AppTopologyService : IAppTopologyService
+++++{
+++++    private readonly IHostService _hostService;
+++++    private readonly IPortService _portService;
+++++
+++++    public AppTopologyService(IHostService hostService, IPortService portService)
+++++    {
+++++        _hostService = hostService;
+++++        _portService = portService;
+++++    }
+++++
+++++    public async Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default)
+++++    {
+++++        var services = await _hostService.GetServicesAsync(ct);
+++++        var ports = await _portService.GetListeningPortsAsync(ct);
+++++
+++++        return services
+++++            .Select(service =>
+++++            {
+++++                var matchedPorts = service.ProcessId is int pid
+++++                    ? ports.Where(port => port.ProcessId == pid).Select(port => port.Port).Distinct().Order().ToList()
+++++                    : [];
+++++
+++++                return new ServiceTopology
+++++                {
+++++                    ServiceName = service.Name,
+++++                    Status = service.Status,
+++++                    ProcessId = service.ProcessId,
+++++                    Ports = matchedPorts
+++++                };
+++++            })
+++++            .OrderBy(x => x.ServiceName, StringComparer.OrdinalIgnoreCase)
+++++            .ToList();
+++++    }
+++++}
++++diff --git a/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs b/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
++++index fe0d2ae..2701b7f 100644
++++--- a/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
+++++++ b/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
++++@@ -26,6 +26,16 @@ broken.service loaded failed failed Broken service
++++         Assert.Equal(ServiceStatus.Failed, services[2].Status);
++++     }
++++ 
+++++    [Fact]
+++++    public void ParseMainPid_Returns_Pid_When_MainPid_Is_Present()
+++++    {
+++++        const string output = "MainPID=4321";
+++++
+++++        var pid = LinuxServiceParser.ParseMainPid(output);
+++++
+++++        Assert.Equal(4321, pid);
+++++    }
+++++
++++     [Fact]
++++     public void Parse_Returns_Empty_For_Empty_Output()
++++     {
++++diff --git a/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs b/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs
++++index 113f387..27fa01e 100644
++++--- a/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs
+++++++ b/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs
++++@@ -13,14 +13,17 @@ public sealed class WindowsServiceParserTests
++++ SERVICE_NAME: Spooler
++++         TYPE               : 110  WIN32_OWN_PROCESS
++++         STATE              : 4  RUNNING
+++++        PID                : 321
++++ 
++++ SERVICE_NAME: W32Time
++++         TYPE               : 20  WIN32_SHARE_PROCESS
++++         STATE              : 1  STOPPED
+++++        PID                : 0
++++ 
++++ SERVICE_NAME: BrokenService
++++         TYPE               : 10  WIN32_OWN_PROCESS
++++         STATE              : 7  FAILED
+++++        PID                : 777
++++ """;
++++ 
++++         var services = WindowsServiceParser.Parse(output);
++++@@ -28,10 +31,13 @@ SERVICE_NAME: BrokenService
++++         Assert.Equal(3, services.Count);
++++         Assert.Equal("Spooler", services[0].Name);
++++         Assert.Equal(ServiceStatus.Running, services[0].Status);
+++++        Assert.Equal(321, services[0].ProcessId);
++++         Assert.Equal("W32Time", services[1].Name);
++++         Assert.Equal(ServiceStatus.Stopped, services[1].Status);
+++++        Assert.Null(services[1].ProcessId);
++++         Assert.Equal("BrokenService", services[2].Name);
++++         Assert.Equal(ServiceStatus.Failed, services[2].Status);
+++++        Assert.Equal(777, services[2].ProcessId);
++++     }
++++ 
++++     [Fact]
++++diff --git a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
++++index 78e79de..2153c4e 100644
++++--- a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+++++++ b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
++++@@ -41,6 +41,7 @@ public static class InfrastructureServiceCollectionExtensions
++++         services.AddSingleton<AzureTableAppRegistry>();
++++         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
++++         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();
+++++        services.AddSingleton<IAppTopologyService, AppTopologyService>();
++++         services.AddSingleton<IAppCatalogService, AppCatalogService>();
++++ 
++++         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
++++diff --git a/ServerOps.Infrastructure/Host/LinuxHostService.cs b/ServerOps.Infrastructure/Host/LinuxHostService.cs
++++index 39f50d6..c8f4b2a 100644
++++--- a/ServerOps.Infrastructure/Host/LinuxHostService.cs
+++++++ b/ServerOps.Infrastructure/Host/LinuxHostService.cs
++++@@ -27,6 +27,29 @@ public sealed class LinuxHostService
++++             return Array.Empty<ServiceInfo>();
++++         }
++++ 
++++-        return LinuxServiceParser.Parse(result.StdOut);
+++++        var services = LinuxServiceParser.Parse(result.StdOut);
+++++        if (services.Count == 0)
+++++        {
+++++            return services;
+++++        }
+++++
+++++        var enrichedServices = new List<ServiceInfo>(services.Count);
+++++
+++++        foreach (var service in services)
+++++        {
+++++            var mainPidResult = await _commandRunner.RunAsync(new CommandRequest
+++++            {
+++++                Command = "systemctl",
+++++                Arguments = ["show", service.Name, "--property", "MainPID"]
+++++            }, ct);
+++++
+++++            var processId = mainPidResult.Succeeded
+++++                ? LinuxServiceParser.ParseMainPid(mainPidResult.StdOut)
+++++                : null;
+++++
+++++            enrichedServices.Add(service with { ProcessId = processId });
+++++        }
+++++
+++++        return enrichedServices;
++++     }
++++ }
++++diff --git a/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs b/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
++++index 944ae8e..886e856 100644
++++--- a/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
+++++++ b/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
++++@@ -63,4 +63,30 @@ public static class LinuxServiceParser
++++ 
++++         return ServiceStatus.Unknown;
++++     }
+++++
+++++    public static int? ParseMainPid(string output)
+++++    {
+++++        if (string.IsNullOrWhiteSpace(output))
+++++        {
+++++            return null;
+++++        }
+++++
+++++        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+++++        {
+++++            if (!line.StartsWith("MainPID=", StringComparison.OrdinalIgnoreCase))
+++++            {
+++++                continue;
+++++            }
+++++
+++++            var value = line["MainPID=".Length..].Trim();
+++++            if (int.TryParse(value, out var pid) && pid > 0)
+++++            {
+++++                return pid;
+++++            }
+++++
+++++            return null;
+++++        }
+++++
+++++        return null;
+++++    }
++++ }
++++diff --git a/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs b/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs
++++index 83c1517..83f79b8 100644
++++--- a/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs
+++++++ b/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs
++++@@ -25,6 +25,7 @@ public static class WindowsServiceParser
++++ 
++++             string? serviceName = null;
++++             ServiceStatus status = ServiceStatus.Unknown;
+++++            int? processId = null;
++++ 
++++             foreach (var rawLine in block.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
++++             {
++++@@ -36,6 +37,14 @@ public static class WindowsServiceParser
++++                 {
++++                     status = ParseStatus(rawLine);
++++                 }
+++++                else if (rawLine.StartsWith("PID", StringComparison.OrdinalIgnoreCase))
+++++                {
+++++                    var value = rawLine[(rawLine.IndexOf(':') + 1)..].Trim();
+++++                    if (int.TryParse(value, out var pid) && pid > 0)
+++++                    {
+++++                        processId = pid;
+++++                    }
+++++                }
++++             }
++++ 
++++             if (!string.IsNullOrWhiteSpace(serviceName))
++++@@ -44,7 +53,7 @@ public static class WindowsServiceParser
++++                 {
++++                     Name = serviceName,
++++                     Status = status,
++++-                    ProcessId = null,
+++++                    ProcessId = processId,
++++                     ExecutablePath = null
++++                 });
++++             }
++++diff --git a/ServerOps.Infrastructure/Host/WindowsHostService.cs b/ServerOps.Infrastructure/Host/WindowsHostService.cs
++++index a9828d7..fa5acec 100644
++++--- a/ServerOps.Infrastructure/Host/WindowsHostService.cs
+++++++ b/ServerOps.Infrastructure/Host/WindowsHostService.cs
++++@@ -19,7 +19,7 @@ public sealed class WindowsHostService
++++         var result = await _commandRunner.RunAsync(new CommandRequest
++++         {
++++             Command = "sc",
++++-            Arguments = ["query", "type=service", "state=all"]
+++++            Arguments = ["queryex", "state=", "all"]
++++         }, ct);
++++ 
++++         if (!result.Succeeded)
++++diff --git a/ServerOps.Web/Components/Pages/Diagnostics.razor b/ServerOps.Web/Components/Pages/Diagnostics.razor
++++index 036148f..54f0792 100644
++++--- a/ServerOps.Web/Components/Pages/Diagnostics.razor
+++++++ b/ServerOps.Web/Components/Pages/Diagnostics.razor
++++@@ -1,6 +1,7 @@
++++ @page "/diagnostics"
++++ @inject IHostService HostService
++++ @inject IPortService PortService
+++++@inject IAppTopologyService AppTopologyService
++++ @inject IServiceControlService ServiceControlService
++++ 
++++ <PageTitle>Host Diagnostics</PageTitle>
++++@@ -74,10 +75,41 @@ else
++++     </table>
++++ }
++++ 
+++++@if (_topology.Count == 0)
+++++{
+++++    <p>No service topology discovered.</p>
+++++}
+++++else
+++++{
+++++    <h2>Service Topology</h2>
+++++    <table class="data-grid">
+++++        <thead>
+++++            <tr>
+++++                <th>Service</th>
+++++                <th>Status</th>
+++++                <th>PID</th>
+++++                <th>Ports</th>
+++++            </tr>
+++++        </thead>
+++++        <tbody>
+++++            @foreach (var item in _topology)
+++++            {
+++++                <tr>
+++++                    <td>@item.ServiceName</td>
+++++                    <td><span class="status @item.Status.ToString().ToLowerInvariant()">@item.Status</span></td>
+++++                    <td>@(item.ProcessId?.ToString() ?? "-")</td>
+++++                    <td>@(item.Ports.Count == 0 ? "-" : string.Join(", ", item.Ports))</td>
+++++                </tr>
+++++            }
+++++        </tbody>
+++++    </table>
+++++}
+++++
++++ @code {
++++     private OsType _currentOs;
++++     private List<ServiceInfo> _services = [];
++++     private List<PortInfo> _ports = [];
+++++    private List<ServiceTopology> _topology = [];
++++     private string _message = string.Empty;
++++ 
++++     protected override async Task OnInitializedAsync()
++++@@ -90,6 +122,7 @@ else
++++         _currentOs = HostService.GetCurrentOs();
++++         _services = (await HostService.GetServicesAsync()).ToList();
++++         _ports = (await PortService.GetListeningPortsAsync()).OrderBy(x => x.Port).ToList();
+++++        _topology = (await AppTopologyService.GetTopologyAsync()).ToList();
++++     }
++++ 
++++     private async Task RunActionAsync(string serviceName, Func<string, CancellationToken, Task<CommandResult>> action)

@@ -69,25 +69,29 @@ public sealed class DeploymentService : IDeploymentService
 
         var tempFolder = _fileSystem.Combine(_fileSystem.GetTempPath(), "serverops", deploymentId);
         var zipPath = _fileSystem.Combine(tempFolder, $"{appName}.zip");
-        var extractPath = _fileSystem.Combine(tempFolder, "extracted");
         var appRoot = _fileSystem.Combine(_runtimeEnvironment.GetAppsRootPath(), appName);
         var currentPath = _fileSystem.Combine(appRoot, "current");
-        var backupPath = _fileSystem.Combine(appRoot, $"backup_{DateTimeOffset.UtcNow:yyyyMMddHHmmss}");
+        var backupPath = _fileSystem.Combine(appRoot, $"backup_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}");
         var stagingPath = _fileSystem.Combine(appRoot, "staging");
-        var hasCurrent = _fileSystem.DirectoryExists(currentPath);
+        var hadCurrent = _fileSystem.DirectoryExists(currentPath);
 
         try
         {
             _fileSystem.CreateDirectory(tempFolder);
-            _fileSystem.CreateDirectory(extractPath);
             _fileSystem.CreateDirectory(appRoot);
 
             var bytes = await DownloadAsync(assetUrl, cancellationToken);
             await _fileSystem.WriteAllBytesAsync(zipPath, bytes, cancellationToken);
 
-            await _archiveService.ExtractZipAsync(zipPath, extractPath, cancellationToken);
+            if (_fileSystem.DirectoryExists(stagingPath))
+            {
+                _fileSystem.DeleteDirectory(stagingPath, recursive: true);
+            }
 
-            var packageIsValid = await _deploymentPackageValidator.IsValidAsync(extractPath, cancellationToken);
+            _fileSystem.CreateDirectory(stagingPath);
+            await _archiveService.ExtractZipAsync(zipPath, stagingPath, cancellationToken);
+
+            var packageIsValid = await _deploymentPackageValidator.IsValidAsync(stagingPath, cancellationToken);
             if (!packageIsValid)
             {
                 return CreateResult(
@@ -101,6 +105,7 @@ public sealed class DeploymentService : IDeploymentService
                     DateTimeOffset.UtcNow);
             }
 
+            var rollbackAvailable = false;
             var stopResult = await _serviceControlService.StopAsync(appName, cancellationToken);
             if (!stopResult.Succeeded)
             {
@@ -115,24 +120,47 @@ public sealed class DeploymentService : IDeploymentService
                     DateTimeOffset.UtcNow);
             }
 
-            if (hasCurrent)
+            try
             {
-                _fileSystem.CopyDirectory(currentPath, backupPath, overwrite: true);
-            }
+                if (hadCurrent)
+                {
+                    if (_fileSystem.DirectoryExists(backupPath))
+                    {
+                        _fileSystem.DeleteDirectory(backupPath, recursive: true);
+                    }
 
-            if (_fileSystem.DirectoryExists(stagingPath))
+                    _fileSystem.MoveDirectory(currentPath, backupPath);
+                    rollbackAvailable = true;
+                }
+
+                _fileSystem.MoveDirectory(stagingPath, currentPath);
+            }
+            catch (Exception ex)
             {
-                _fileSystem.DeleteDirectory(stagingPath, recursive: true);
+                if (rollbackAvailable)
+                {
+                    return await RollbackAsync(
+                        deploymentId,
+                        appName,
+                        version,
+                        startedAtUtc,
+                        backupPath,
+                        currentPath,
+                        rollbackAvailable,
+                        $"Activation failed: {ex.Message}",
+                        cancellationToken);
+                }
+
+                return CreateResult(
+                    deploymentId,
+                    appName,
+                    version,
+                    DeploymentStatus.Failed,
+                    DeploymentStage.ActivatingNewVersion,
+                    ex.Message,
+                    startedAtUtc,
+                    DateTimeOffset.UtcNow);
             }
-
-            _fileSystem.CopyDirectory(extractPath, stagingPath, overwrite: true);
-
-            if (_fileSystem.DirectoryExists(currentPath))
-            {
-                _fileSystem.DeleteDirectory(currentPath, recursive: true);
-            }
-
-            _fileSystem.MoveDirectory(stagingPath, currentPath);
 
             var startResult = await _serviceControlService.StartAsync(appName, cancellationToken);
             if (!startResult.Succeeded)
@@ -144,7 +172,7 @@ public sealed class DeploymentService : IDeploymentService
                     startedAtUtc,
                     backupPath,
                     currentPath,
-                    hasCurrent,
+                    rollbackAvailable,
                     GetCommandMessage("Failed to start service.", startResult),
                     cancellationToken);
             }
@@ -159,12 +187,12 @@ public sealed class DeploymentService : IDeploymentService
                     startedAtUtc,
                     backupPath,
                     currentPath,
-                    hasCurrent,
+                    rollbackAvailable,
                     "Service verification failed after deployment.",
                     cancellationToken);
             }
 
-            var healthVerified = await _healthVerificationService.VerifyAsync(appName, cancellationToken);
+            var healthVerified = await VerifyHealthWithRetryAsync(appName, cancellationToken);
             if (!healthVerified)
             {
                 return await RollbackAsync(
@@ -174,7 +202,7 @@ public sealed class DeploymentService : IDeploymentService
                     startedAtUtc,
                     backupPath,
                     currentPath,
-                    hasCurrent,
+                    rollbackAvailable,
                     "Health verification failed after deployment.",
                     cancellationToken);
             }
@@ -213,7 +241,44 @@ public sealed class DeploymentService : IDeploymentService
         var topology = await _appTopologyService.GetTopologyAsync(cancellationToken);
         return topology.Any(item =>
             string.Equals(item.ServiceName, appName, StringComparison.OrdinalIgnoreCase) &&
-            item.Status == ServiceStatus.Running);
+            item.Status == ServiceStatus.Running &&
+            item.Ports.Count > 0);
+    }
+
+    private async Task<bool> VerifyHealthWithRetryAsync(string appName, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (await _healthVerificationService.VerifyAsync(appName, cancellationToken))
+            {
+                return true;
+            }
+
+            if (attempt < 9)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<bool> VerifyServiceWithRetryAsync(string appName, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            if (await VerifyServiceAsync(appName, cancellationToken))
+            {
+                return true;
+            }
+
+            if (attempt < 9)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+            }
+        }
+
+        return false;
     }
 
     private async Task<DeploymentResult> RollbackAsync(
@@ -247,7 +312,7 @@ public sealed class DeploymentService : IDeploymentService
                 _fileSystem.DeleteDirectory(currentPath, recursive: true);
             }
 
-            _fileSystem.CopyDirectory(backupPath, currentPath, overwrite: true);
+            _fileSystem.MoveDirectory(backupPath, currentPath);
 
             var restartResult = await _serviceControlService.StartAsync(appName, cancellationToken);
             if (!restartResult.Succeeded)
@@ -259,6 +324,20 @@ public sealed class DeploymentService : IDeploymentService
                     DeploymentStatus.Failed,
                     DeploymentStage.Failed,
                     $"{message} Rollback restart failed. {GetCommandMessage("Service start failed.", restartResult)}",
+                    startedAtUtc,
+                    DateTimeOffset.UtcNow);
+            }
+
+            var serviceVerified = await VerifyServiceWithRetryAsync(appName, cancellationToken);
+            if (!serviceVerified)
+            {
+                return CreateResult(
+                    deploymentId,
+                    appName,
+                    version,
+                    DeploymentStatus.Failed,
+                    DeploymentStage.Failed,
+                    $"{message} Rollback verification failed.",
                     startedAtUtc,
                     DateTimeOffset.UtcNow);
             }
