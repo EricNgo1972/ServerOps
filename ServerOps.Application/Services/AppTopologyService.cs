@@ -18,13 +18,21 @@ public sealed class AppTopologyService : IAppTopologyService
     {
         var services = await _hostService.GetServicesAsync(ct);
         var ports = await _portService.GetListeningPortsAsync(ct);
+        var portsByProcessId = ports
+            .Where(port => port.ProcessId.HasValue)
+            .GroupBy(port => port.ProcessId!.Value)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<int>)group.Select(port => port.Port).Distinct().Order().ToList());
 
         return services
+            .Where(service => service.Status == Domain.Enums.ServiceStatus.Running)
             .Select(service =>
             {
                 var matchedPorts = service.ProcessId is int pid
-                    ? ports.Where(port => port.ProcessId == pid).Select(port => port.Port).Distinct().Order().ToList()
-                    : [];
+                    && portsByProcessId.TryGetValue(pid, out var servicePorts)
+                        ? servicePorts
+                        : Array.Empty<int>();
 
                 return new ServiceTopology
                 {

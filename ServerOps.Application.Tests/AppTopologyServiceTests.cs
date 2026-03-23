@@ -87,6 +87,49 @@ public sealed class AppTopologyServiceTests
         Assert.Empty(item.Ports);
     }
 
+    [Fact]
+    public async Task GetTopologyAsync_Only_Includes_Running_Services()
+    {
+        var service = CreateService(
+            new[]
+            {
+                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 },
+                new ServiceInfo { Name = "stopped-app", Status = ServiceStatus.Stopped, ProcessId = 456 }
+            },
+            new[]
+            {
+                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" },
+                new PortInfo { Port = 6000, ProcessId = 456, ProcessName = "stopped-app" }
+            });
+
+        var topology = await service.GetTopologyAsync();
+
+        var item = Assert.Single(topology);
+        Assert.Equal("phoebus", item.ServiceName);
+    }
+
+    [Fact]
+    public async Task GetTopologyAsync_Handles_Multiple_Services_Sharing_Same_Pid()
+    {
+        var service = CreateService(
+            new[]
+            {
+                new ServiceInfo { Name = "shared-a", Status = ServiceStatus.Running, ProcessId = 123 },
+                new ServiceInfo { Name = "shared-b", Status = ServiceStatus.Running, ProcessId = 123 }
+            },
+            new[]
+            {
+                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "shared" },
+                new PortInfo { Port = 5001, ProcessId = 123, ProcessName = "shared" }
+            });
+
+        var topology = await service.GetTopologyAsync();
+
+        Assert.Equal(2, topology.Count);
+        Assert.Equal(new[] { 5000, 5001 }, topology[0].Ports);
+        Assert.Equal(new[] { 5000, 5001 }, topology[1].Ports);
+    }
+
     private static AppTopologyService CreateService(IReadOnlyList<ServiceInfo> services, IReadOnlyList<PortInfo> ports)
     {
         return new AppTopologyService(new FakeHostService(services), new FakePortService(ports));

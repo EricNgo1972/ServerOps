@@ -42,6 +42,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();
         services.AddSingleton<IAppTopologyService, AppTopologyService>();
+        services.AddSingleton<IEndpointRegistry, InMemoryEndpointRegistry>();
+        services.AddSingleton<IEndpointService, EndpointService>();
         services.AddSingleton<IAppCatalogService, AppCatalogService>();
 
         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>

@@ -37,6 +37,28 @@ broken.service loaded failed failed Broken service
     }
 
     [Fact]
+    public void ParseServicePidMap_Returns_Service_To_Pid_Map()
+    {
+        const string output = """
+Id=cron.service
+MainPID=111
+
+Id=ssh.service
+MainPID=0
+
+Id=broken.service
+MainPID=999
+""";
+
+        var pidMap = LinuxServiceParser.ParseServicePidMap(output);
+
+        Assert.Equal(3, pidMap.Count);
+        Assert.Equal(111, pidMap["cron.service"]);
+        Assert.Null(pidMap["ssh.service"]);
+        Assert.Equal(999, pidMap["broken.service"]);
+    }
+
+    [Fact]
     public void Parse_Returns_Empty_For_Empty_Output()
     {
         var services = LinuxServiceParser.Parse(string.Empty);

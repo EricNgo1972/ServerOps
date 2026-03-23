@@ -89,4 +89,57 @@ public static class LinuxServiceParser
 
         return null;
     }
+
+    public static Dictionary<string, int?> ParseServicePidMap(string output)
+    {
+        var result = new Dictionary<string, int?>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return result;
+        }
+
+        string? serviceId = null;
+        int? mainPid = null;
+
+        foreach (var rawLine in output.Split('\n'))
+        {
+            var line = rawLine.Trim();
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                if (!string.IsNullOrWhiteSpace(serviceId))
+                {
+                    result[serviceId] = mainPid;
+                }
+
+                serviceId = null;
+                mainPid = null;
+                continue;
+            }
+
+            if (line.StartsWith("Id=", StringComparison.OrdinalIgnoreCase))
+            {
+                serviceId = line["Id=".Length..].Trim();
+            }
+            else if (line.StartsWith("MainPID=", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = line["MainPID=".Length..].Trim();
+                if (int.TryParse(value, out var pid) && pid > 0)
+                {
+                    mainPid = pid;
+                }
+                else
+                {
+                    mainPid = null;
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(serviceId))
+        {
+            result[serviceId] = mainPid;
+        }
+
+        return result;
+    }
 }

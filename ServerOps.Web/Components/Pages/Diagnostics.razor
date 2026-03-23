@@ -2,6 +2,7 @@
 @inject IHostService HostService
 @inject IPortService PortService
 @inject IAppTopologyService AppTopologyService
+@inject IEndpointService EndpointService
 @inject IServiceControlService ServiceControlService
 
 <PageTitle>Host Diagnostics</PageTitle>
@@ -105,11 +106,42 @@ else
     </table>
 }
 
+@if (_endpoints.Count == 0)
+{
+    <p>No endpoint mappings discovered.</p>
+}
+else
+{
+    <h2>Endpoints</h2>
+    <table class="data-grid">
+        <thead>
+            <tr>
+                <th>Service</th>
+                <th>Port</th>
+                <th>URL</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var endpoint in _endpoints)
+            {
+                <tr>
+                    <td>@endpoint.ServiceName</td>
+                    <td>@(endpoint.Port == 0 ? "-" : endpoint.Port)</td>
+                    <td>@(string.IsNullOrWhiteSpace(endpoint.PublicUrl) ? "-" : endpoint.PublicUrl)</td>
+                    <td>@(endpoint.IsExposed ? "Exposed" : "Not Exposed")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
 @code {
     private OsType _currentOs;
     private List<ServiceInfo> _services = [];
     private List<PortInfo> _ports = [];
     private List<ServiceTopology> _topology = [];
+    private List<ServiceEndpoint> _endpoints = [];
     private string _message = string.Empty;
 
     protected override async Task OnInitializedAsync()
@@ -123,6 +155,7 @@ else
         _services = (await HostService.GetServicesAsync()).ToList();
         _ports = (await PortService.GetListeningPortsAsync()).OrderBy(x => x.Port).ToList();
         _topology = (await AppTopologyService.GetTopologyAsync()).ToList();
+        _endpoints = (await EndpointService.GetEndpointsAsync()).ToList();
     }
 
     private async Task RunActionAsync(string serviceName, Func<string, CancellationToken, Task<CommandResult>> action)

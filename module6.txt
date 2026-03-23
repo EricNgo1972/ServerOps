@@ -1,0 +1,461 @@
+commit ebc4bc300da5de7a3ac09960cb1e3c1cf21627f9
+Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
+Date:   Mon Mar 23 04:07:04 2026 -0400
+
+    module6
+
+diff --git a/ServerOps.Application.Tests/AppTopologyServiceTests.cs b/ServerOps.Application.Tests/AppTopologyServiceTests.cs
+new file mode 100644
+index 0000000..96db384
+--- /dev/null
++++ b/ServerOps.Application.Tests/AppTopologyServiceTests.cs
+@@ -0,0 +1,122 @@
++using ServerOps.Application.Abstractions;
++using ServerOps.Application.DTOs;
++using ServerOps.Application.Services;
++using ServerOps.Domain.Entities;
++using ServerOps.Domain.Enums;
++using Xunit;
++
++namespace ServerOps.Application.Tests;
++
++public sealed class AppTopologyServiceTests
++{
++    [Fact]
++    public async Task GetTopologyAsync_Matches_Single_Port_By_ProcessId()
++    {
++        var service = CreateService(
++            new[]
++            {
++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 }
++            },
++            new[]
++            {
++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" }
++            });
++
++        var topology = await service.GetTopologyAsync();
++
++        var item = Assert.Single(topology);
++        Assert.Equal("phoebus", item.ServiceName);
++        Assert.Equal(new[] { 5000 }, item.Ports);
++    }
++
++    [Fact]
++    public async Task GetTopologyAsync_Matches_Multiple_Ports_By_ProcessId()
++    {
++        var service = CreateService(
++            new[]
++            {
++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 }
++            },
++            new[]
++            {
++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" },
++                new PortInfo { Port = 5001, ProcessId = 123, ProcessName = "phoebus" }
++            });
++
++        var topology = await service.GetTopologyAsync();
++
++        var item = Assert.Single(topology);
++        Assert.Equal(new[] { 5000, 5001 }, item.Ports);
++    }
++
++    [Fact]
++    public async Task GetTopologyAsync_Returns_Empty_Ports_When_Service_Has_No_Pid()
++    {
++        var service = CreateService(
++            new[]
++            {
++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = null }
++            },
++            new[]
++            {
++                new PortInfo { Port = 5000, ProcessId = 123, ProcessName = "phoebus" }
++            });
++
++        var topology = await service.GetTopologyAsync();
++
++        var item = Assert.Single(topology);
++        Assert.Empty(item.Ports);
++    }
++
++    [Fact]
++    public async Task GetTopologyAsync_Ignores_Unmatched_Ports()
++    {
++        var service = CreateService(
++            new[]
++            {
++                new ServiceInfo { Name = "phoebus", Status = ServiceStatus.Running, ProcessId = 123 }
++            },
++            new[]
++            {
++                new PortInfo { Port = 6000, ProcessId = 999, ProcessName = "other" }
++            });
++
++        var topology = await service.GetTopologyAsync();
++
++        var item = Assert.Single(topology);
++        Assert.Empty(item.Ports);
++    }
++
++    private static AppTopologyService CreateService(IReadOnlyList<ServiceInfo> services, IReadOnlyList<PortInfo> ports)
++    {
++        return new AppTopologyService(new FakeHostService(services), new FakePortService(ports));
++    }
++
++    private sealed class FakeHostService : IHostService
++    {
++        private readonly IReadOnlyList<ServiceInfo> _services;
++
++        public FakeHostService(IReadOnlyList<ServiceInfo> services)
++        {
++            _services = services;
++        }
++
++        public OsType GetCurrentOs() => OsType.Linux;
++
++        public Task<IReadOnlyList<ServiceInfo>> GetServicesAsync(CancellationToken ct = default)
++            => Task.FromResult(_services);
++    }
++
++    private sealed class FakePortService : IPortService
++    {
++        private readonly IReadOnlyList<PortInfo> _ports;
++
++        public FakePortService(IReadOnlyList<PortInfo> ports)
++        {
++            _ports = ports;
++        }
++
++        public Task<IReadOnlyList<PortInfo>> GetListeningPortsAsync(CancellationToken cancellationToken = default)
++            => Task.FromResult(_ports);
++    }
++}
+diff --git a/ServerOps.Application/Abstractions/IAppTopologyService.cs b/ServerOps.Application/Abstractions/IAppTopologyService.cs
+new file mode 100644
+index 0000000..7f0f77b
+--- /dev/null
++++ b/ServerOps.Application/Abstractions/IAppTopologyService.cs
+@@ -0,0 +1,8 @@
++using ServerOps.Application.DTOs;
++
++namespace ServerOps.Application.Abstractions;
++
++public interface IAppTopologyService
++{
++    Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default);
++}
+diff --git a/ServerOps.Application/DTOs/ServiceTopology.cs b/ServerOps.Application/DTOs/ServiceTopology.cs
+new file mode 100644
+index 0000000..18a45a9
+--- /dev/null
++++ b/ServerOps.Application/DTOs/ServiceTopology.cs
+@@ -0,0 +1,11 @@
++using ServerOps.Domain.Enums;
++
++namespace ServerOps.Application.DTOs;
++
++public sealed class ServiceTopology
++{
++    public string ServiceName { get; init; } = string.Empty;
++    public ServiceStatus Status { get; init; } = ServiceStatus.Unknown;
++    public int? ProcessId { get; init; }
++    public IReadOnlyList<int> Ports { get; init; } = Array.Empty<int>();
++}
+diff --git a/ServerOps.Application/Services/AppTopologyService.cs b/ServerOps.Application/Services/AppTopologyService.cs
+new file mode 100644
+index 0000000..fe4942f
+--- /dev/null
++++ b/ServerOps.Application/Services/AppTopologyService.cs
+@@ -0,0 +1,40 @@
++using ServerOps.Application.Abstractions;
++using ServerOps.Application.DTOs;
++
++namespace ServerOps.Application.Services;
++
++public sealed class AppTopologyService : IAppTopologyService
++{
++    private readonly IHostService _hostService;
++    private readonly IPortService _portService;
++
++    public AppTopologyService(IHostService hostService, IPortService portService)
++    {
++        _hostService = hostService;
++        _portService = portService;
++    }
++
++    public async Task<IReadOnlyList<ServiceTopology>> GetTopologyAsync(CancellationToken ct = default)
++    {
++        var services = await _hostService.GetServicesAsync(ct);
++        var ports = await _portService.GetListeningPortsAsync(ct);
++
++        return services
++            .Select(service =>
++            {
++                var matchedPorts = service.ProcessId is int pid
++                    ? ports.Where(port => port.ProcessId == pid).Select(port => port.Port).Distinct().Order().ToList()
++                    : [];
++
++                return new ServiceTopology
++                {
++                    ServiceName = service.Name,
++                    Status = service.Status,
++                    ProcessId = service.ProcessId,
++                    Ports = matchedPorts
++                };
++            })
++            .OrderBy(x => x.ServiceName, StringComparer.OrdinalIgnoreCase)
++            .ToList();
++    }
++}
+diff --git a/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs b/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
+index fe0d2ae..2701b7f 100644
+--- a/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
++++ b/ServerOps.Infrastructure.Tests/LinuxServiceParserTests.cs
+@@ -26,6 +26,16 @@ broken.service loaded failed failed Broken service
+         Assert.Equal(ServiceStatus.Failed, services[2].Status);
+     }
+ 
++    [Fact]
++    public void ParseMainPid_Returns_Pid_When_MainPid_Is_Present()
++    {
++        const string output = "MainPID=4321";
++
++        var pid = LinuxServiceParser.ParseMainPid(output);
++
++        Assert.Equal(4321, pid);
++    }
++
+     [Fact]
+     public void Parse_Returns_Empty_For_Empty_Output()
+     {
+diff --git a/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs b/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs
+index 113f387..27fa01e 100644
+--- a/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs
++++ b/ServerOps.Infrastructure.Tests/WindowsServiceParserTests.cs
+@@ -13,14 +13,17 @@ public sealed class WindowsServiceParserTests
+ SERVICE_NAME: Spooler
+         TYPE               : 110  WIN32_OWN_PROCESS
+         STATE              : 4  RUNNING
++        PID                : 321
+ 
+ SERVICE_NAME: W32Time
+         TYPE               : 20  WIN32_SHARE_PROCESS
+         STATE              : 1  STOPPED
++        PID                : 0
+ 
+ SERVICE_NAME: BrokenService
+         TYPE               : 10  WIN32_OWN_PROCESS
+         STATE              : 7  FAILED
++        PID                : 777
+ """;
+ 
+         var services = WindowsServiceParser.Parse(output);
+@@ -28,10 +31,13 @@ SERVICE_NAME: BrokenService
+         Assert.Equal(3, services.Count);
+         Assert.Equal("Spooler", services[0].Name);
+         Assert.Equal(ServiceStatus.Running, services[0].Status);
++        Assert.Equal(321, services[0].ProcessId);
+         Assert.Equal("W32Time", services[1].Name);
+         Assert.Equal(ServiceStatus.Stopped, services[1].Status);
++        Assert.Null(services[1].ProcessId);
+         Assert.Equal("BrokenService", services[2].Name);
+         Assert.Equal(ServiceStatus.Failed, services[2].Status);
++        Assert.Equal(777, services[2].ProcessId);
+     }
+ 
+     [Fact]
+diff --git a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+index 78e79de..2153c4e 100644
+--- a/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
++++ b/ServerOps.Infrastructure/Configuration/InfrastructureServiceCollectionExtensions.cs
+@@ -41,6 +41,7 @@ public static class InfrastructureServiceCollectionExtensions
+         services.AddSingleton<AzureTableAppRegistry>();
+         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
+         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();
++        services.AddSingleton<IAppTopologyService, AppTopologyService>();
+         services.AddSingleton<IAppCatalogService, AppCatalogService>();
+ 
+         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
+diff --git a/ServerOps.Infrastructure/Host/LinuxHostService.cs b/ServerOps.Infrastructure/Host/LinuxHostService.cs
+index 39f50d6..c8f4b2a 100644
+--- a/ServerOps.Infrastructure/Host/LinuxHostService.cs
++++ b/ServerOps.Infrastructure/Host/LinuxHostService.cs
+@@ -27,6 +27,29 @@ public sealed class LinuxHostService
+             return Array.Empty<ServiceInfo>();
+         }
+ 
+-        return LinuxServiceParser.Parse(result.StdOut);
++        var services = LinuxServiceParser.Parse(result.StdOut);
++        if (services.Count == 0)
++        {
++            return services;
++        }
++
++        var enrichedServices = new List<ServiceInfo>(services.Count);
++
++        foreach (var service in services)
++        {
++            var mainPidResult = await _commandRunner.RunAsync(new CommandRequest
++            {
++                Command = "systemctl",
++                Arguments = ["show", service.Name, "--property", "MainPID"]
++            }, ct);
++
++            var processId = mainPidResult.Succeeded
++                ? LinuxServiceParser.ParseMainPid(mainPidResult.StdOut)
++                : null;
++
++            enrichedServices.Add(service with { ProcessId = processId });
++        }
++
++        return enrichedServices;
+     }
+ }
+diff --git a/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs b/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
+index 944ae8e..886e856 100644
+--- a/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
++++ b/ServerOps.Infrastructure/Host/Parsing/LinuxServiceParser.cs
+@@ -63,4 +63,30 @@ public static class LinuxServiceParser
+ 
+         return ServiceStatus.Unknown;
+     }
++
++    public static int? ParseMainPid(string output)
++    {
++        if (string.IsNullOrWhiteSpace(output))
++        {
++            return null;
++        }
++
++        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
++        {
++            if (!line.StartsWith("MainPID=", StringComparison.OrdinalIgnoreCase))
++            {
++                continue;
++            }
++
++            var value = line["MainPID=".Length..].Trim();
++            if (int.TryParse(value, out var pid) && pid > 0)
++            {
++                return pid;
++            }
++
++            return null;
++        }
++
++        return null;
++    }
+ }
+diff --git a/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs b/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs
+index 83c1517..83f79b8 100644
+--- a/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs
++++ b/ServerOps.Infrastructure/Host/Parsing/WindowsServiceParser.cs
+@@ -25,6 +25,7 @@ public static class WindowsServiceParser
+ 
+             string? serviceName = null;
+             ServiceStatus status = ServiceStatus.Unknown;
++            int? processId = null;
+ 
+             foreach (var rawLine in block.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+             {
+@@ -36,6 +37,14 @@ public static class WindowsServiceParser
+                 {
+                     status = ParseStatus(rawLine);
+                 }
++                else if (rawLine.StartsWith("PID", StringComparison.OrdinalIgnoreCase))
++                {
++                    var value = rawLine[(rawLine.IndexOf(':') + 1)..].Trim();
++                    if (int.TryParse(value, out var pid) && pid > 0)
++                    {
++                        processId = pid;
++                    }
++                }
+             }
+ 
+             if (!string.IsNullOrWhiteSpace(serviceName))
+@@ -44,7 +53,7 @@ public static class WindowsServiceParser
+                 {
+                     Name = serviceName,
+                     Status = status,
+-                    ProcessId = null,
++                    ProcessId = processId,
+                     ExecutablePath = null
+                 });
+             }
+diff --git a/ServerOps.Infrastructure/Host/WindowsHostService.cs b/ServerOps.Infrastructure/Host/WindowsHostService.cs
+index a9828d7..fa5acec 100644
+--- a/ServerOps.Infrastructure/Host/WindowsHostService.cs
++++ b/ServerOps.Infrastructure/Host/WindowsHostService.cs
+@@ -19,7 +19,7 @@ public sealed class WindowsHostService
+         var result = await _commandRunner.RunAsync(new CommandRequest
+         {
+             Command = "sc",
+-            Arguments = ["query", "type=service", "state=all"]
++            Arguments = ["queryex", "state=", "all"]
+         }, ct);
+ 
+         if (!result.Succeeded)
+diff --git a/ServerOps.Web/Components/Pages/Diagnostics.razor b/ServerOps.Web/Components/Pages/Diagnostics.razor
+index 036148f..54f0792 100644
+--- a/ServerOps.Web/Components/Pages/Diagnostics.razor
++++ b/ServerOps.Web/Components/Pages/Diagnostics.razor
+@@ -1,6 +1,7 @@
+ @page "/diagnostics"
+ @inject IHostService HostService
+ @inject IPortService PortService
++@inject IAppTopologyService AppTopologyService
+ @inject IServiceControlService ServiceControlService
+ 
+ <PageTitle>Host Diagnostics</PageTitle>
+@@ -74,10 +75,41 @@ else
+     </table>
+ }
+ 
++@if (_topology.Count == 0)
++{
++    <p>No service topology discovered.</p>
++}
++else
++{
++    <h2>Service Topology</h2>
++    <table class="data-grid">
++        <thead>
++            <tr>
++                <th>Service</th>
++                <th>Status</th>
++                <th>PID</th>
++                <th>Ports</th>
++            </tr>
++        </thead>
++        <tbody>
++            @foreach (var item in _topology)
++            {
++                <tr>
++                    <td>@item.ServiceName</td>
++                    <td><span class="status @item.Status.ToString().ToLowerInvariant()">@item.Status</span></td>
++                    <td>@(item.ProcessId?.ToString() ?? "-")</td>
++                    <td>@(item.Ports.Count == 0 ? "-" : string.Join(", ", item.Ports))</td>
++                </tr>
++            }
++        </tbody>
++    </table>
++}
++
+ @code {
+     private OsType _currentOs;
+     private List<ServiceInfo> _services = [];
+     private List<PortInfo> _ports = [];
++    private List<ServiceTopology> _topology = [];
+     private string _message = string.Empty;
+ 
+     protected override async Task OnInitializedAsync()
+@@ -90,6 +122,7 @@ else
+         _currentOs = HostService.GetCurrentOs();
+         _services = (await HostService.GetServicesAsync()).ToList();
+         _ports = (await PortService.GetListeningPortsAsync()).OrderBy(x => x.Port).ToList();
++        _topology = (await AppTopologyService.GetTopologyAsync()).ToList();
+     }
+ 
+     private async Task RunActionAsync(string serviceName, Func<string, CancellationToken, Task<CommandResult>> action)

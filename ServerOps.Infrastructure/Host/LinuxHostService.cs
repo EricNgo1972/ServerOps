@@ -33,23 +33,24 @@ public sealed class LinuxHostService
             return services;
         }
 
-        var enrichedServices = new List<ServiceInfo>(services.Count);
-
-        foreach (var service in services)
+        var pidResult = await _commandRunner.RunAsync(new CommandRequest
         {
-            var mainPidResult = await _commandRunner.RunAsync(new CommandRequest
-            {
-                Command = "systemctl",
-                Arguments = ["show", service.Name, "--property", "MainPID"]
-            }, ct);
+            Command = "systemctl",
+            Arguments = ["show", "--type=service", "--property=Id,MainPID"]
+        }, ct);
 
-            var processId = mainPidResult.Succeeded
-                ? LinuxServiceParser.ParseMainPid(mainPidResult.StdOut)
-                : null;
-
-            enrichedServices.Add(service with { ProcessId = processId });
+        if (!pidResult.Succeeded)
+        {
+            return services;
         }
 
-        return enrichedServices;
+        var pidMap = LinuxServiceParser.ParseServicePidMap(pidResult.StdOut);
+
+        return services
+            .Select(service => service with
+            {
+                ProcessId = pidMap.TryGetValue(service.Name, out var pid) ? pid : null
+            })
+            .ToList();
     }
 }
