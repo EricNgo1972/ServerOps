@@ -63,4 +63,30 @@ public static class LinuxServiceParser
 
         return ServiceStatus.Unknown;
     }
+
+    public static int? ParseMainPid(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith("MainPID=", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var value = line["MainPID=".Length..].Trim();
+            if (int.TryParse(value, out var pid) && pid > 0)
+            {
+                return pid;
+            }
+
+            return null;
+        }
+
+        return null;
+    }
 }

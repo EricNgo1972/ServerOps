@@ -25,6 +25,7 @@ public static class WindowsServiceParser
 
             string? serviceName = null;
             ServiceStatus status = ServiceStatus.Unknown;
+            int? processId = null;
 
             foreach (var rawLine in block.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
@@ -36,6 +37,14 @@ public static class WindowsServiceParser
                 {
                     status = ParseStatus(rawLine);
                 }
+                else if (rawLine.StartsWith("PID", StringComparison.OrdinalIgnoreCase))
+                {
+                    var value = rawLine[(rawLine.IndexOf(':') + 1)..].Trim();
+                    if (int.TryParse(value, out var pid) && pid > 0)
+                    {
+                        processId = pid;
+                    }
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(serviceName))
@@ -44,7 +53,7 @@ public static class WindowsServiceParser
                 {
                     Name = serviceName,
                     Status = status,
-                    ProcessId = null,
+                    ProcessId = processId,
                     ExecutablePath = null
                 });
             }

@@ -27,6 +27,29 @@ public sealed class LinuxHostService
             return Array.Empty<ServiceInfo>();
         }
 
-        return LinuxServiceParser.Parse(result.StdOut);
+        var services = LinuxServiceParser.Parse(result.StdOut);
+        if (services.Count == 0)
+        {
+            return services;
+        }
+
+        var enrichedServices = new List<ServiceInfo>(services.Count);
+
+        foreach (var service in services)
+        {
+            var mainPidResult = await _commandRunner.RunAsync(new CommandRequest
+            {
+                Command = "systemctl",
+                Arguments = ["show", service.Name, "--property", "MainPID"]
+            }, ct);
+
+            var processId = mainPidResult.Succeeded
+                ? LinuxServiceParser.ParseMainPid(mainPidResult.StdOut)
+                : null;
+
+            enrichedServices.Add(service with { ProcessId = processId });
+        }
+
+        return enrichedServices;
     }
 }

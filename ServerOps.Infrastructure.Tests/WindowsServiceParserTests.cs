@@ -13,14 +13,17 @@ public sealed class WindowsServiceParserTests
 SERVICE_NAME: Spooler
         TYPE               : 110  WIN32_OWN_PROCESS
         STATE              : 4  RUNNING
+        PID                : 321
 
 SERVICE_NAME: W32Time
         TYPE               : 20  WIN32_SHARE_PROCESS
         STATE              : 1  STOPPED
+        PID                : 0
 
 SERVICE_NAME: BrokenService
         TYPE               : 10  WIN32_OWN_PROCESS
         STATE              : 7  FAILED
+        PID                : 777
 """;
 
         var services = WindowsServiceParser.Parse(output);
@@ -28,10 +31,13 @@ SERVICE_NAME: BrokenService
         Assert.Equal(3, services.Count);
         Assert.Equal("Spooler", services[0].Name);
         Assert.Equal(ServiceStatus.Running, services[0].Status);
+        Assert.Equal(321, services[0].ProcessId);
         Assert.Equal("W32Time", services[1].Name);
         Assert.Equal(ServiceStatus.Stopped, services[1].Status);
+        Assert.Null(services[1].ProcessId);
         Assert.Equal("BrokenService", services[2].Name);
         Assert.Equal(ServiceStatus.Failed, services[2].Status);
+        Assert.Equal(777, services[2].ProcessId);
     }
 
     [Fact]

@@ -27,6 +27,16 @@ broken.service loaded failed failed Broken service
     }
 
     [Fact]
+    public void ParseMainPid_Returns_Pid_When_MainPid_Is_Present()
+    {
+        const string output = "MainPID=4321";
+
+        var pid = LinuxServiceParser.ParseMainPid(output);
+
+        Assert.Equal(4321, pid);
+    }
+
+    [Fact]
     public void Parse_Returns_Empty_For_Empty_Output()
     {
         var services = LinuxServiceParser.Parse(string.Empty);

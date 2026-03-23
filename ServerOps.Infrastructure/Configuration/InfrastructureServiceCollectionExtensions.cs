@@ -41,6 +41,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<AzureTableAppRegistry>();
         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();
+        services.AddSingleton<IAppTopologyService, AppTopologyService>();
         services.AddSingleton<IAppCatalogService, AppCatalogService>();
 
         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
