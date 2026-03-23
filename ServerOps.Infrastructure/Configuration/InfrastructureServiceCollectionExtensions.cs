@@ -19,6 +19,7 @@ public static class InfrastructureServiceCollectionExtensions
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<CloudflareOptions>(configuration.GetSection("Cloudflare"));
+        services.Configure<DomainOptions>(configuration.GetSection("Domain"));
         services.Configure<GitHubOptions>(configuration.GetSection("GitHub"));
         services.Configure<PathsOptions>(configuration.GetSection("Paths"));
 
@@ -50,6 +51,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IEndpointRegistry, InMemoryEndpointRegistry>();
         services.AddSingleton<IEndpointService, EndpointService>();
         services.AddSingleton<IExposureService, ExposureService>();
+        services.AddSingleton<IDomainNameBuilder, DefaultDomainNameBuilder>();
+        services.AddSingleton<IOneClickDeployService, OneClickDeployService>();
         services.AddSingleton<IAppCatalogService, AppCatalogService>();
         services.AddHttpClient<ICloudflareDnsService, CloudflareDnsService>();
 

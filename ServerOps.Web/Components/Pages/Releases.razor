@@ -1,6 +1,6 @@
 @page "/releases"
 @inject IGitHubService GitHubService
-@inject IDeploymentService DeploymentService
+@inject IOneClickDeployService OneClickDeployService
 @inject IDeploymentHistoryStore DeploymentHistoryStore
 @inject IRollbackService RollbackService
 
@@ -8,21 +8,29 @@
 
 <h1>GitHub Releases</h1>
 
-<EditForm Model="_query" OnValidSubmit="SearchAsync">
+<EditForm Model="_request" OnValidSubmit="SearchAsync">
     <div class="form-row">
         <label for="repo">Repository</label>
-        <InputText id="repo" @bind-Value="_query.Repo" />
+        <InputText id="repo" @bind-Value="_request.Repo" />
     </div>
     <div class="form-row">
         <label for="app">Application Name</label>
-        <InputText id="app" @bind-Value="_deployment.AppName" />
+        <InputText id="app" @bind-Value="_request.AppName" />
     </div>
     <div class="form-row">
         <label for="assetUrl">Asset URL</label>
-        <InputText id="assetUrl" @bind-Value="_deployment.AssetUrl" />
+        <InputText id="assetUrl" @bind-Value="_request.AssetUrl" />
+    </div>
+    <div class="form-row">
+        <label for="hostname">Hostname</label>
+        <InputText id="hostname" @bind-Value="_request.Hostname" disabled="@_request.AutoGenerateHostname" />
+    </div>
+    <div class="form-row">
+        <label for="auto-hostname">Auto-generate hostname</label>
+        <InputCheckbox id="auto-hostname" @bind-Value="_request.AutoGenerateHostname" />
     </div>
     <button type="submit">Load Releases</button>
-    <button type="button" @onclick="DeployFromInputAsync">Deploy</button>
+    <button type="button" @onclick="DeployFromInputAsync">One-Click Deploy</button>
 </EditForm>
 
 @if (!string.IsNullOrWhiteSpace(_message))
@@ -51,7 +59,7 @@
                         {
                             <li>
                                 @asset.Name (@asset.Size bytes)
-                                <button @onclick="() => DeployAsync(asset.DownloadUrl)">Deploy</button>
+                                <button @onclick="() => OneClickDeployAsync(asset.DownloadUrl)">One-Click Deploy</button>
                             </li>
                         }
                     </ul>
@@ -61,15 +69,16 @@
     </div>
 }
 
-@if (_deploymentResult is not null)
+@if (_oneClickResult is not null)
 {
     <article class="card">
-        <h2>Deployment Result</h2>
-        <p>Status: @_deploymentResult.Status</p>
-        <p>Stage: @_deploymentResult.Stage</p>
-        <p>Message: @(string.IsNullOrWhiteSpace(_deploymentResult.Message) ? "-" : _deploymentResult.Message)</p>
-        <p>Started: @_deploymentResult.StartedAtUtc.ToLocalTime()</p>
-        <p>Finished: @(_deploymentResult.FinishedAtUtc?.ToLocalTime().ToString() ?? "-")</p>
+        <h2>One-Click Deploy Result</h2>
+        <p>Deployment Status: @_oneClickResult.Deployment.Status</p>
+        <p>Deployment Stage: @_oneClickResult.Deployment.Stage</p>
+        <p>Hostname: @(_oneClickResult.Hostname ?? "-")</p>
+        <p>Public URL: @(_oneClickResult.PublicUrl ?? "-")</p>
+        <p>Exposure Status: @(_oneClickResult.Exposed ? "Exposed" : "Not Exposed")</p>
+        <p>Message: @(string.IsNullOrWhiteSpace(_oneClickResult.Message) ? "-" : _oneClickResult.Message)</p>
     </article>
 }
 
@@ -119,69 +128,74 @@
 }
 
 @code {
-    private readonly ReleaseQueryDto _query = new();
-    private readonly DeploymentRequestDto _deployment = new();
+    private readonly OneClickDeployRequest _request = new() { AutoGenerateHostname = true };
     private List<ReleaseInfo> _releases = [];
     private List<DeploymentHistoryItem> _history = [];
-    private DeploymentResult? _deploymentResult;
+    private OneClickDeployResult? _oneClickResult;
     private string _message = string.Empty;
     private IReadOnlyList<DeploymentHistoryItem> OrderedHistory
         => _history.OrderByDescending(x => x.StartedAtUtc).ToList();
 
     private async Task SearchAsync()
     {
-        _releases = (await GitHubService.GetReleasesAsync(_query.Repo)).ToList();
+        _releases = (await GitHubService.GetReleasesAsync(_request.Repo)).ToList();
         await LoadHistoryAsync();
         _message = _releases.Count == 0 ? "No releases found." : string.Empty;
     }
 
-    private async Task DeployAsync(string assetUrl)
+    private async Task OneClickDeployAsync(string assetUrl)
     {
-        if (string.IsNullOrWhiteSpace(_deployment.AppName))
+        if (string.IsNullOrWhiteSpace(_request.AppName))
         {
             _message = "Application name is required.";
             return;
         }
 
-        _deployment.AssetUrl = assetUrl;
-        _deploymentResult = await DeploymentService.DeployAsync(_deployment.AppName, assetUrl);
+        _request.AssetUrl = assetUrl;
+        _oneClickResult = await OneClickDeployService.DeployAsync(_request);
         await LoadHistoryAsync();
-        _message = $"{_deploymentResult.AppName} deployment {_deploymentResult.Status} at {_deploymentResult.StartedAtUtc.LocalDateTime}.";
+        _message = _oneClickResult.Message ?? string.Empty;
     }
 
     private async Task DeployFromInputAsync()
     {
-        if (string.IsNullOrWhiteSpace(_deployment.AssetUrl))
+        if (string.IsNullOrWhiteSpace(_request.AssetUrl))
         {
             _message = "Asset URL is required.";
             return;
         }
 
-        await DeployAsync(_deployment.AssetUrl);
+        await OneClickDeployAsync(_request.AssetUrl);
     }
 
     private async Task RollbackAsync(string deploymentId)
     {
-        if (string.IsNullOrWhiteSpace(_deployment.AppName))
+        if (string.IsNullOrWhiteSpace(_request.AppName))
         {
             _message = "Application name is required.";
             return;
         }
 
-        _deploymentResult = await RollbackService.RollbackAsync(_deployment.AppName, deploymentId);
+        var rollbackResult = await RollbackService.RollbackAsync(_request.AppName, deploymentId);
+        _oneClickResult = new OneClickDeployResult
+        {
+            Deployment = rollbackResult,
+            Exposed = false,
+            Message = rollbackResult.Message
+        };
         await LoadHistoryAsync();
-        _message = $"{_deploymentResult.AppName} rollback {_deploymentResult.Status} at {_deploymentResult.StartedAtUtc.LocalDateTime}.";
+        _message = rollbackResult.Message ?? string.Empty;
     }
 
     private async Task LoadHistoryAsync()
     {
-        if (string.IsNullOrWhiteSpace(_deployment.AppName))
+        if (string.IsNullOrWhiteSpace(_request.AppName))
         {
             _history = [];
             return;
         }
 
-        _history = (await DeploymentHistoryStore.GetByAppAsync(_deployment.AppName)).ToList();
+        _history = (await DeploymentHistoryStore.GetByAppAsync(_request.AppName)).ToList();
     }
 
     private bool IsLatest(DeploymentHistoryItem item)
