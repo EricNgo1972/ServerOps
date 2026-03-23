@@ -12,6 +12,7 @@ public sealed class LinuxPortParserTests
 State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess
 LISTEN 0      511    0.0.0.0:80      0.0.0.0:*    users:(("nginx",pid=321,fd=6))
 LISTEN 0      128    127.0.0.1:5000  0.0.0.0:*    users:(("phoebus",pid=777,fd=9))
+ESTAB  0      0      127.0.0.1:7000  127.0.0.1:80 users:(("ignored",pid=999,fd=4))
 """;
 
         var ports = LinuxPortParser.ParseLinuxSs(output);
@@ -23,6 +24,20 @@ LISTEN 0      128    127.0.0.1:5000  0.0.0.0:*    users:(("phoebus",pid=777,fd=9
         Assert.Equal(5000, ports[1].Port);
         Assert.Equal(777, ports[1].ProcessId);
         Assert.Equal("phoebus", ports[1].ProcessName);
+    }
+
+    [Fact]
+    public void ParseLinuxSs_Deduplicates_By_Port()
+    {
+        const string output = """
+LISTEN 0      511    0.0.0.0:80      0.0.0.0:*    users:(("nginx",pid=321,fd=6))
+LISTEN 0      511    [::]:80         [::]:*       users:(("nginx",pid=321,fd=7))
+""";
+
+        var ports = LinuxPortParser.ParseLinuxSs(output);
+
+        var port = Assert.Single(ports);
+        Assert.Equal(80, port.Port);
     }
 
     [Fact]

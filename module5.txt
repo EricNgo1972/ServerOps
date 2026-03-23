@@ -1,0 +1,922 @@
+commit 7899f96a06e2a2f99e20cd435fae8919dc5227ad
+Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
+Date:   Mon Mar 23 03:57:11 2026 -0400
+
+    Implement ports discovery
+
+diff --git a/ServerOps.Infrastructure.Tests/LinuxPortParserTests.cs b/ServerOps.Infrastructure.Tests/LinuxPortParserTests.cs
+new file mode 100644
+index 0000000..a14aa6d
+--- /dev/null
++++ b/ServerOps.Infrastructure.Tests/LinuxPortParserTests.cs
+@@ -0,0 +1,49 @@
++using ServerOps.Infrastructure.Networking.Parsing;
++using Xunit;
++
++namespace ServerOps.Infrastructure.Tests;
++
++public sealed class LinuxPortParserTests
++{
++    [Fact]
++    public void ParseLinuxSs_Returns_Listening_Ports()
++    {
++        const string output = """
++State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess
++LISTEN 0      511    0.0.0.0:80      0.0.0.0:*    users:(("nginx",pid=321,fd=6))
++LISTEN 0      128    127.0.0.1:5000  0.0.0.0:*    users:(("phoebus",pid=777,fd=9))
++""";
++
++        var ports = LinuxPortParser.ParseLinuxSs(output);
++
++        Assert.Equal(2, ports.Count);
++        Assert.Equal(80, ports[0].Port);
++        Assert.Equal(321, ports[0].ProcessId);
++        Assert.Equal("nginx", ports[0].ProcessName);
++        Assert.Equal(5000, ports[1].Port);
++        Assert.Equal(777, ports[1].ProcessId);
++        Assert.Equal("phoebus", ports[1].ProcessName);
++    }
++
++    [Fact]
++    public void ParseLinuxSs_Returns_Empty_For_Empty_Output()
++    {
++        var ports = LinuxPortParser.ParseLinuxSs(string.Empty);
++
++        Assert.Empty(ports);
++    }
++
++    [Fact]
++    public void ParseLinuxSs_Ignores_Malformed_Output()
++    {
++        const string output = """
++header
++invalid line
++another bad row
++""";
++
++        var ports = LinuxPortParser.ParseLinuxSs(output);
++
++        Assert.Empty(ports);
++    }
++}
+diff --git a/ServerOps.Infrastructure.Tests/WindowsPortParserTests.cs b/ServerOps.Infrastructure.Tests/WindowsPortParserTests.cs
+new file mode 100644
+index 0000000..af470ff
+--- /dev/null
++++ b/ServerOps.Infrastructure.Tests/WindowsPortParserTests.cs
+@@ -0,0 +1,93 @@
++using ServerOps.Infrastructure.Networking.Parsing;
++using Xunit;
++
++namespace ServerOps.Infrastructure.Tests;
++
++public sealed class WindowsPortParserTests
++{
++    [Fact]
++    public void ParseWindowsNetstat_Returns_Listening_Tcp_Ports()
++    {
++        const string output = """
++  Proto  Local Address          Foreign Address        State           PID
++  TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       321
++  TCP    127.0.0.1:5000         0.0.0.0:0              LISTENING       777
++  TCP    127.0.0.1:5001         0.0.0.0:0              ESTABLISHED     888
++""";
++
++        var ports = WindowsPortParser.ParseWindowsNetstat(output);
++
++        Assert.Equal(2, ports.Count);
++        Assert.Equal(80, ports[0].Port);
++        Assert.Equal(321, ports[0].ProcessId);
++        Assert.Equal(5000, ports[1].Port);
++        Assert.Equal(777, ports[1].ProcessId);
++    }
++
++    [Fact]
++    public void ParseWindowsServicePids_Returns_Pid_Mappings()
++    {
++        const string output = """
++SERVICE_NAME: W3SVC
++        TYPE               : 20  WIN32_SHARE_PROCESS
++        STATE              : 4  RUNNING
++        PID                : 321
++
++SERVICE_NAME: PhoebusApi
++        TYPE               : 10  WIN32_OWN_PROCESS
++        STATE              : 4  RUNNING
++        PID                : 777
++""";
++
++        var map = WindowsPortParser.ParseWindowsServicePids(output);
++
++        Assert.Equal("W3SVC", map[321]);
++        Assert.Equal("PhoebusApi", map[777]);
++    }
++
++    [Fact]
++    public void JoinWindowsPorts_Joins_Port_List_With_Service_Names()
++    {
++        const string netstat = """
++  Proto  Local Address          Foreign Address        State           PID
++  TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       321
++  TCP    127.0.0.1:5000         0.0.0.0:0              LISTENING       777
++  TCP    127.0.0.1:6000         0.0.0.0:0              LISTENING       999
++""";
++        const string services = """
++SERVICE_NAME: W3SVC
++        PID                : 321
++
++SERVICE_NAME: PhoebusApi
++        PID                : 777
++""";
++
++        var ports = WindowsPortParser.ParseWindowsNetstat(netstat);
++        var servicePids = WindowsPortParser.ParseWindowsServicePids(services);
++        var joined = WindowsPortParser.JoinWindowsPorts(ports, servicePids);
++
++        Assert.Equal(3, joined.Count);
++        Assert.Equal("W3SVC", joined[0].ProcessName);
++        Assert.Equal("PhoebusApi", joined[1].ProcessName);
++        Assert.Equal(string.Empty, joined[2].ProcessName);
++    }
++
++    [Fact]
++    public void ParseWindowsParsers_Return_Empty_For_Empty_Output()
++    {
++        Assert.Empty(WindowsPortParser.ParseWindowsNetstat(string.Empty));
++        Assert.Empty(WindowsPortParser.ParseWindowsServicePids(string.Empty));
++    }
++
++    [Fact]
++    public void ParseWindowsParsers_Ignore_Malformed_Output()
++    {
++        const string output = """
++garbage line
++another bad line
++""";
++
++        Assert.Empty(WindowsPortParser.ParseWindowsNetstat(output));
++        Assert.Empty(WindowsPortParser.ParseWindowsServicePids(output));
++    }
++}
+diff --git a/ServerOps.Infrastructure/Networking/LinuxPortService.cs b/ServerOps.Infrastructure/Networking/LinuxPortService.cs
+index b038f08..546cc9e 100644
+--- a/ServerOps.Infrastructure/Networking/LinuxPortService.cs
++++ b/ServerOps.Infrastructure/Networking/LinuxPortService.cs
+@@ -1,6 +1,6 @@
+-using System.Text.RegularExpressions;
+ using ServerOps.Application.Abstractions;
+ using ServerOps.Application.DTOs;
++using ServerOps.Infrastructure.Networking.Parsing;
+ 
+ namespace ServerOps.Infrastructure.Networking;
+ 
+@@ -23,48 +23,9 @@ public sealed class LinuxPortService
+ 
+         if (!result.Succeeded)
+         {
+-            return [];
++            return Array.Empty<PortInfo>();
+         }
+ 
+-        var ports = new List<PortInfo>();
+-        foreach (var line in result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Skip(1))
+-        {
+-            var parts = Regex.Split(line, @"\s+");
+-            if (parts.Length < 5)
+-            {
+-                continue;
+-            }
+-
+-            var localAddress = parts[3];
+-            var portSegment = localAddress[(localAddress.LastIndexOf(':') + 1)..];
+-            if (!int.TryParse(portSegment, out var port))
+-            {
+-                continue;
+-            }
+-
+-            var processName = string.Empty;
+-            int? processId = null;
+-
+-            var pidMatch = Regex.Match(line, @"pid=(\d+)");
+-            if (pidMatch.Success && int.TryParse(pidMatch.Groups[1].Value, out var parsedPid))
+-            {
+-                processId = parsedPid;
+-            }
+-
+-            var processMatch = Regex.Match(line, "\"([^\"]+)\"");
+-            if (processMatch.Success)
+-            {
+-                processName = processMatch.Groups[1].Value;
+-            }
+-
+-            ports.Add(new PortInfo
+-            {
+-                Port = port,
+-                ProcessId = processId,
+-                ProcessName = processName
+-            });
+-        }
+-
+-        return ports;
++        return LinuxPortParser.ParseLinuxSs(result.StdOut);
+     }
+ }
+diff --git a/ServerOps.Infrastructure/Networking/Parsing/LinuxPortParser.cs b/ServerOps.Infrastructure/Networking/Parsing/LinuxPortParser.cs
+new file mode 100644
+index 0000000..02d3bee
+--- /dev/null
++++ b/ServerOps.Infrastructure/Networking/Parsing/LinuxPortParser.cs
+@@ -0,0 +1,57 @@
++using System.Text.RegularExpressions;
++using ServerOps.Application.DTOs;
++
++namespace ServerOps.Infrastructure.Networking.Parsing;
++
++public static class LinuxPortParser
++{
++    public static IReadOnlyList<PortInfo> ParseLinuxSs(string output)
++    {
++        if (string.IsNullOrWhiteSpace(output))
++        {
++            return Array.Empty<PortInfo>();
++        }
++
++        var ports = new List<PortInfo>();
++
++        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Skip(1))
++        {
++            var parts = Regex.Split(line, @"\s+");
++            if (parts.Length < 5)
++            {
++                continue;
++            }
++
++            var localAddress = parts[3];
++            var portSegment = localAddress[(localAddress.LastIndexOf(':') + 1)..];
++            if (!int.TryParse(portSegment, out var port))
++            {
++                continue;
++            }
++
++            int? processId = null;
++            var processName = string.Empty;
++
++            var pidMatch = Regex.Match(line, @"pid=(\d+)");
++            if (pidMatch.Success && int.TryParse(pidMatch.Groups[1].Value, out var parsedPid))
++            {
++                processId = parsedPid;
++            }
++
++            var processMatch = Regex.Match(line, "\"([^\"]+)\"");
++            if (processMatch.Success)
++            {
++                processName = processMatch.Groups[1].Value;
++            }
++
++            ports.Add(new PortInfo
++            {
++                Port = port,
++                ProcessId = processId,
++                ProcessName = processName
++            });
++        }
++
++        return ports;
++    }
++}
+diff --git a/ServerOps.Infrastructure/Networking/Parsing/WindowsPortParser.cs b/ServerOps.Infrastructure/Networking/Parsing/WindowsPortParser.cs
+new file mode 100644
+index 0000000..fe8de23
+--- /dev/null
++++ b/ServerOps.Infrastructure/Networking/Parsing/WindowsPortParser.cs
+@@ -0,0 +1,103 @@
++using ServerOps.Application.DTOs;
++
++namespace ServerOps.Infrastructure.Networking.Parsing;
++
++public static class WindowsPortParser
++{
++    public static IReadOnlyList<PortInfo> ParseWindowsNetstat(string output)
++    {
++        if (string.IsNullOrWhiteSpace(output))
++        {
++            return Array.Empty<PortInfo>();
++        }
++
++        var ports = new List<PortInfo>();
++
++        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
++        {
++            if (!line.StartsWith("TCP", StringComparison.OrdinalIgnoreCase))
++            {
++                continue;
++            }
++
++            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
++            if (parts.Length < 5 || !parts[3].Equals("LISTENING", StringComparison.OrdinalIgnoreCase))
++            {
++                continue;
++            }
++
++            var endpoint = parts[1];
++            var portSegment = endpoint[(endpoint.LastIndexOf(':') + 1)..];
++            if (!int.TryParse(portSegment, out var port))
++            {
++                continue;
++            }
++
++            ports.Add(new PortInfo
++            {
++                Port = port,
++                ProcessId = int.TryParse(parts[4], out var pid) ? pid : null,
++                ProcessName = string.Empty
++            });
++        }
++
++        return ports;
++    }
++
++    public static IReadOnlyDictionary<int, string> ParseWindowsServicePids(string output)
++    {
++        if (string.IsNullOrWhiteSpace(output))
++        {
++            return new Dictionary<int, string>();
++        }
++
++        var map = new Dictionary<int, string>();
++        string? serviceName = null;
++
++        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
++        {
++            if (line.StartsWith("SERVICE_NAME:", StringComparison.OrdinalIgnoreCase))
++            {
++                serviceName = line["SERVICE_NAME:".Length..].Trim();
++            }
++            else if (line.StartsWith("PID", StringComparison.OrdinalIgnoreCase))
++            {
++                var value = line[(line.IndexOf(':') + 1)..].Trim();
++                if (int.TryParse(value, out var pid) && pid > 0 && !string.IsNullOrWhiteSpace(serviceName))
++                {
++                    map[pid] = serviceName;
++                }
++            }
++        }
++
++        return map;
++    }
++
++    public static IReadOnlyList<PortInfo> JoinWindowsPorts(
++        IReadOnlyList<PortInfo> ports,
++        IReadOnlyDictionary<int, string> servicePids)
++    {
++        if (ports.Count == 0)
++        {
++            return Array.Empty<PortInfo>();
++        }
++
++        return ports
++            .Select(port =>
++            {
++                var processName = string.Empty;
++                if (port.ProcessId is int pid && servicePids.TryGetValue(pid, out var mappedName))
++                {
++                    processName = mappedName;
++                }
++
++                return new PortInfo
++                {
++                    Port = port.Port,
++                    ProcessId = port.ProcessId,
++                    ProcessName = processName
++                };
++            })
++            .ToList();
++    }
++}
+diff --git a/ServerOps.Infrastructure/Networking/WindowsPortService.cs b/ServerOps.Infrastructure/Networking/WindowsPortService.cs
+index 9c84797..3c083fa 100644
+--- a/ServerOps.Infrastructure/Networking/WindowsPortService.cs
++++ b/ServerOps.Infrastructure/Networking/WindowsPortService.cs
+@@ -1,5 +1,6 @@
+ using ServerOps.Application.Abstractions;
+ using ServerOps.Application.DTOs;
++using ServerOps.Infrastructure.Networking.Parsing;
+ 
+ namespace ServerOps.Infrastructure.Networking;
+ 
+@@ -28,67 +29,12 @@ public sealed class WindowsPortService
+ 
+         if (!portResult.Succeeded)
+         {
+-            return [];
++            return Array.Empty<PortInfo>();
+         }
+ 
+-        var processMap = BuildProcessMap(serviceResult.StdOut);
+-        var ports = new List<PortInfo>();
++        var ports = WindowsPortParser.ParseWindowsNetstat(portResult.StdOut);
++        var servicePids = WindowsPortParser.ParseWindowsServicePids(serviceResult.StdOut);
+ 
+-        foreach (var line in portResult.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+-        {
+-            if (!line.StartsWith("TCP", StringComparison.OrdinalIgnoreCase))
+-            {
+-                continue;
+-            }
+-
+-            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+-            if (parts.Length < 5 || !parts[3].Equals("LISTENING", StringComparison.OrdinalIgnoreCase))
+-            {
+-                continue;
+-            }
+-
+-            var endpoint = parts[1];
+-            var portSegment = endpoint[(endpoint.LastIndexOf(':') + 1)..];
+-            if (!int.TryParse(portSegment, out var port))
+-            {
+-                continue;
+-            }
+-
+-            int? processId = int.TryParse(parts[4], out var pid) ? pid : null;
+-            processMap.TryGetValue(processId ?? 0, out var processName);
+-
+-            ports.Add(new PortInfo
+-            {
+-                Port = port,
+-                ProcessId = processId,
+-                ProcessName = processName ?? string.Empty
+-            });
+-        }
+-
+-        return ports;
+-    }
+-
+-    private static Dictionary<int, string> BuildProcessMap(string output)
+-    {
+-        var map = new Dictionary<int, string>();
+-        string serviceName = string.Empty;
+-
+-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+-        {
+-            if (line.StartsWith("SERVICE_NAME:", StringComparison.OrdinalIgnoreCase))
+-            {
+-                serviceName = line["SERVICE_NAME:".Length..].Trim();
+-            }
+-            else if (line.StartsWith("PID", StringComparison.OrdinalIgnoreCase))
+-            {
+-                var value = line[(line.IndexOf(':') + 1)..].Trim();
+-                if (int.TryParse(value, out var pid) && pid > 0 && !string.IsNullOrWhiteSpace(serviceName))
+-                {
+-                    map[pid] = serviceName;
+-                }
+-            }
+-        }
+-
+-        return map;
++        return WindowsPortParser.JoinWindowsPorts(ports, servicePids);
+     }
+ }
+diff --git a/ServerOps.Web/Components/Pages/Diagnostics.razor b/ServerOps.Web/Components/Pages/Diagnostics.razor
+index 0fff2dd..036148f 100644
+--- a/ServerOps.Web/Components/Pages/Diagnostics.razor
++++ b/ServerOps.Web/Components/Pages/Diagnostics.razor
+@@ -1,5 +1,6 @@
+ @page "/diagnostics"
+ @inject IHostService HostService
++@inject IPortService PortService
+ @inject IServiceControlService ServiceControlService
+ 
+ <PageTitle>Host Diagnostics</PageTitle>
+@@ -45,9 +46,38 @@ else
+     </table>
+ }
+ 
++@if (_ports.Count == 0)
++{
++    <p>No listening TCP ports discovered.</p>
++}
++else
++{
++    <h2>Listening Ports</h2>
++    <table class="data-grid">
++        <thead>
++            <tr>
++                <th>Port</th>
++                <th>PID</th>
++                <th>Process/Service</th>
++            </tr>
++        </thead>
++        <tbody>
++            @foreach (var port in _ports)
++            {
++                <tr>
++                    <td>@port.Port</td>
++                    <td>@(port.ProcessId?.ToString() ?? "-")</td>
++                    <td>@(string.IsNullOrWhiteSpace(port.ProcessName) ? "-" : port.ProcessName)</td>
++                </tr>
++            }
++        </tbody>
++    </table>
++}
++
+ @code {
+     private OsType _currentOs;
+     private List<ServiceInfo> _services = [];
++    private List<PortInfo> _ports = [];
+     private string _message = string.Empty;
+ 
+     protected override async Task OnInitializedAsync()
+@@ -59,6 +89,7 @@ else
+     {
+         _currentOs = HostService.GetCurrentOs();
+         _services = (await HostService.GetServicesAsync()).ToList();
++        _ports = (await PortService.GetListeningPortsAsync()).OrderBy(x => x.Port).ToList();
+     }
+ 
+     private async Task RunActionAsync(string serviceName, Func<string, CancellationToken, Task<CommandResult>> action)
+diff --git a/dfsdf b/dfsdf
+deleted file mode 100644
+index 644cb5e..0000000
+--- a/dfsdf
++++ /dev/null
+@@ -1,376 +0,0 @@
+-[33mcommit 3cf224b38b311b81119002fa9ff68ff1e3df2df7[m[33m ([m[1;36mHEAD -> [m[1;32mmaster[m[33m)[m
+-Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
+-Date:   Mon Mar 23 03:19:04 2026 -0400
+-
+-    initial commit - module 1 to 4
+-
+-[1mdiff --git a/.gitignore b/.gitignore[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..bf98ae1[m
+-[1m--- /dev/null[m
+-[1m+++ b/.gitignore[m
+-[36m@@ -0,0 +1,16 @@[m
+-[32m+[m[32m# Visual Studio[m
+-[32m+[m[32m.vs/[m
+-[32m+[m[32m*.user[m
+-[32m+[m[32m*.suo[m
+-[32m+[m
+-[32m+[m[32m# Build output[m
+-[32m+[m[32mbin/[m
+-[32m+[m[32mobj/[m
+-[32m+[m
+-[32m+[m[32m# Rider / VS Code (optional)[m
+-[32m+[m[32m.idea/[m
+-[32m+[m[32m.vscode/[m
+-[32m+[m
+-[32m+[m[32m# OS[m
+-[32m+[m[32m.DS_Store[m
+-[32m+[m[32mThumbs.db[m
+-\ No newline at end of file[m
+-[1mdiff --git a/AGENTS.md b/AGENTS.md[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..29b9c85[m
+-[1m--- /dev/null[m
+-[1m+++ b/AGENTS.md[m
+-[36m@@ -0,0 +1,79 @@[m
+-[32m+[m[32m# ServerOps AI Agent Rules (Minimal)[m
+-[32m+[m
+-[32m+[m[32m## PRIMARY GOAL[m
+-[32m+[m[32mBuild a minimal cross-platform (.NET 8) Blazor Server app to:[m
+-[32m+[m[32m- Discover and manage system services[m
+-[32m+[m[32m- Integrate with cloudflared tunnels[m
+-[32m+[m[32m- Deploy apps from GitHub releases[m
+-[32m+[m
+-[32m+[m[32m---[m
+-[32m+[m
+-[32m+[m[32m## ARCHITECTURE[m
+-[32m+[m
+-[32m+[m[32mUse simple layered structure:[m
+-[32m+[m
+-[32m+[m[32m- Domain → models only[m
+-[32m+[m[32m- Application → interfaces + logic[m
+-[32m+[m[32m- Infrastructure → OS + external integrations[m
+-[32m+[m[32m- Web → UI only[m
+-[32m+[m
+-[32m+[m[32mSTRICT:[m
+-[32m+[m[32m- No cross-layer violations[m
+-[32m+[m[32m- No direct shell execution in UI[m
+-[32m+[m[32m- All commands go through ICommandRunner[m
+-[32m+[m
+-[32m+[m[32m---[m
+-[32m+[m
+-[32m+[m[32m## PLATFORM SUPPORT[m
+-[32m+[m
+-[32m+[m[32mMust support:[m
+-[32m+[m[32m- Linux[m
+-[32m+[m[32m- Windows[m
+-[32m+[m
+-[32m+[m[32m---[m
+-[32m+[m
+-[32m+[m[32m## COMMAND RULES[m
+-[32m+[m
+-[32m+[m[32m- No arbitrary shell execution[m
+-[32m+[m[32m- Only predefined commands allowed[m
+-[32m+[m
+-[32m+[m[32mAllowed:[m
+-[32m+[m[32m- systemctl[m
+-[32m+[m[32m- sc[m
+-[32m+[m[32m- net[m
+-[32m+[m[32m- cloudflared[m
+-[32m+[m[32m- ss / netstat[m
+-[32m+[m
+-[32m+[m[32m---[m
+-[32m+[m
+-[32m+[m[32m## DEPLOYMENT RULES[m
+-[32m+[m
+-[32m+[m[32mDeployment steps:[m
+-[32m+[m[32m1. Stop service[m
+-[32m+[m[32m2. Backup current version[m
+-[32m+[m[32m3. Deploy new version[m
+-[32m+[m[32m4. Start service[m
+-[32m+[m
+-[32m+[m[32m---[m
+-[32m+[m
+-[32m+[m[32m## UI RULES[m
+-[32m+[m
+-[32m+[m[32m- Blazor Server only[m
+-[32m+[m[32m- Keep UI simple and functional[m
+-[32m+[m
+-[32m+[m[32m---[m
+-[32m+[m
+-[32m+[m[32m## CODING RULES[m
+-[32m+[m
+-[32m+[m[32m- Use dependency injection[m
+-[32m+[m[32m- Use async/await[m
+-[32m+[m[32m- No hardcoded paths[m
+-[32m+[m[32m- Keep implementation minimal[m
+-[32m+[m
+-[32m+[m[32m---[m
+-[32m+[m
+-[32m+[m[32m## OUTPUT RULES[m
+-[32m+[m
+-[32m+[m[32m- Generate complete working files[m
+-[32m+[m[32m- No TODO[m
+-[32m+[m[32m- No pseudo-code[m
+-[1mdiff --git a/ServerOps.Application.Tests/ManagedAppFilterTests.cs b/ServerOps.Application.Tests/ManagedAppFilterTests.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..ea9dfc1[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application.Tests/ManagedAppFilterTests.cs[m
+-[36m@@ -0,0 +1,53 @@[m
+-[32m+[m[32musing ServerOps.Application.Models;[m
+-[32m+[m[32musing ServerOps.Application.Services;[m
+-[32m+[m[32musing ServerOps.Domain.Entities;[m
+-[32m+[m[32musing ServerOps.Domain.Enums;[m
+-[32m+[m[32musing Xunit;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Tests;[m
+-[32m+[m
+-[32m+[m[32mpublic sealed class ManagedAppFilterTests[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    private readonly ManagedAppFilter _filter = new();[m
+-[32m+[m
+-[32m+[m[32m    [Fact][m
+-[32m+[m[32m    public async Task FilterAsync_Returns_Only_Matching_App_Services()[m
+-[32m+[m[32m    {[m
+-[32m+[m[32m        var apps = new[][m
+-[32m+[m[32m        {[m
+-[32m+[m[32m            new CompanyApp { Id = "phoebus", Name = "phoebus" },[m
+-[32m+[m[32m            new CompanyApp { Id = "ocr", Name = "ocr" }[m
+-[32m+[m[32m        };[m
+-[32m+[m
+-[32m+[m[32m        var services = new[][m
+-[32m+[m[32m        {[m
+-[32m+[m[32m            new ServiceInfo { Name = "phoebus-api", Status = ServiceStatus.Running },[m
+-[32m+[m[32m            new ServiceInfo { Name = "phoebus-worker", Status = ServiceStatus.Running },[m
+-[32m+[m[32m            new ServiceInfo { Name = "nginx", Status = ServiceStatus.Running },[m
+-[32m+[m[32m            new ServiceInfo { Name = "ocr", Status = ServiceStatus.Running }[m
+-[32m+[m[32m        };[m
+-[32m+[m
+-[32m+[m[32m        var matches = await _filter.FilterAsync(services, apps);[m
+-[32m+[m
+-[32m+[m[32m        Assert.Equal(new[] { "phoebus-api", "phoebus-worker", "ocr" }, matches.Select(x => x.Name).ToArray());[m
+-[32m+[m[32m    }[m
+-[32m+[m
+-[32m+[m[32m    [Fact][m
+-[32m+[m[32m    public async Task FilterAsync_Is_Case_Insensitive_And_Removes_Service_Suffix()[m
+-[32m+[m[32m    {[m
+-[32m+[m[32m        var apps = new[][m
+-[32m+[m[32m        {[m
+-[32m+[m[32m            new CompanyApp { Id = "phoebus", Name = "PHOEBUS" }[m
+-[32m+[m[32m        };[m
+-[32m+[m
+-[32m+[m[32m        var services = new[][m
+-[32m+[m[32m        {[m
+-[32m+[m[32m            new ServiceInfo { Name = "phoebus.service", Status = ServiceStatus.Running }[m
+-[32m+[m[32m        };[m
+-[32m+[m
+-[32m+[m[32m        var matches = await _filter.FilterAsync(services, apps);[m
+-[32m+[m
+-[32m+[m[32m        var match = Assert.Single(matches);[m
+-[32m+[m[32m        Assert.Equal("phoebus.service", match.Name);[m
+-[32m+[m[32m    }[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application.Tests/ServerOps.Application.Tests.csproj b/ServerOps.Application.Tests/ServerOps.Application.Tests.csproj[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..b098243[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application.Tests/ServerOps.Application.Tests.csproj[m
+-[36m@@ -0,0 +1,24 @@[m
+-[32m+[m[32m<Project Sdk="Microsoft.NET.Sdk">[m
+-[32m+[m[32m  <PropertyGroup>[m
+-[32m+[m[32m    <TargetFramework>net8.0</TargetFramework>[m
+-[32m+[m[32m    <ImplicitUsings>enable</ImplicitUsings>[m
+-[32m+[m[32m    <Nullable>enable</Nullable>[m
+-[32m+[m[32m    <IsPackable>false</IsPackable>[m
+-[32m+[m[32m  </PropertyGroup>[m
+-[32m+[m[32m  <ItemGroup>[m
+-[32m+[m[32m    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />[m
+-[32m+[m[32m    <PackageReference Include="xunit" Version="2.9.2" />[m
+-[32m+[m[32m    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">[m
+-[32m+[m[32m      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>[m
+-[32m+[m[32m      <PrivateAssets>all</PrivateAssets>[m
+-[32m+[m[32m    </PackageReference>[m
+-[32m+[m[32m    <PackageReference Include="coverlet.collector" Version="6.0.2">[m
+-[32m+[m[32m      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>[m
+-[32m+[m[32m      <PrivateAssets>all</PrivateAssets>[m
+-[32m+[m[32m    </PackageReference>[m
+-[32m+[m[32m  </ItemGroup>[m
+-[32m+[m[32m  <ItemGroup>[m
+-[32m+[m[32m    <ProjectReference Include="..\ServerOps.Application\ServerOps.Application.csproj" />[m
+-[32m+[m[32m    <ProjectReference Include="..\ServerOps.Domain\ServerOps.Domain.csproj" />[m
+-[32m+[m[32m  </ItemGroup>[m
+-[32m+[m[32m</Project>[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IAppCatalogService.cs b/ServerOps.Application/Abstractions/IAppCatalogService.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..5822381[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IAppCatalogService.cs[m
+-[36m@@ -0,0 +1,10 @@[m
+-[32m+[m[32musing ServerOps.Application.DTOs;[m
+-[32m+[m[32musing ServerOps.Domain.Entities;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IAppCatalogService[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<IReadOnlyList<AppInstance>> GetApplicationsAsync(CancellationToken cancellationToken = default);[m
+-[32m+[m[32m    Task<AppDetailsDto?> GetApplicationAsync(string serviceName, CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IArchiveService.cs b/ServerOps.Application/Abstractions/IArchiveService.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..6f381af[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IArchiveService.cs[m
+-[36m@@ -0,0 +1,6 @@[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IArchiveService[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task ExtractZipAsync(string zipPath, string destinationPath, CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/ICloudflaredService.cs b/ServerOps.Application/Abstractions/ICloudflaredService.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..266b2dc[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/ICloudflaredService.cs[m
+-[36m@@ -0,0 +1,13 @@[m
+-[32m+[m[32musing ServerOps.Application.DTOs;[m
+-[32m+[m[32musing ServerOps.Domain.Entities;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface ICloudflaredService[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<bool> IsInstalledAsync(CancellationToken cancellationToken = default);[m
+-[32m+[m[32m    Task<bool> IsRunningAsync(CancellationToken cancellationToken = default);[m
+-[32m+[m[32m    Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default);[m
+-[32m+[m[32m    Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default);[m
+-[32m+[m[32m    Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/ICommandRunner.cs b/ServerOps.Application/Abstractions/ICommandRunner.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..fedc3d8[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/ICommandRunner.cs[m
+-[36m@@ -0,0 +1,8 @@[m
+-[32m+[m[32musing ServerOps.Application.DTOs;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface ICommandRunner[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<CommandResult> RunAsync(CommandRequest request, CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/ICompanyAppRegistry.cs b/ServerOps.Application/Abstractions/ICompanyAppRegistry.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..26aca45[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/ICompanyAppRegistry.cs[m
+-[36m@@ -0,0 +1,8 @@[m
+-[32m+[m[32musing ServerOps.Application.Models;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface ICompanyAppRegistry[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<IReadOnlyList<CompanyApp>> GetAppsAsync(CancellationToken ct = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IDeploymentService.cs b/ServerOps.Application/Abstractions/IDeploymentService.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..1701746[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IDeploymentService.cs[m
+-[36m@@ -0,0 +1,8 @@[m
+-[32m+[m[32musing ServerOps.Domain.Entities;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IDeploymentService[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<DeploymentRecord> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IFileSystem.cs b/ServerOps.Application/Abstractions/IFileSystem.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..2ca7f55[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IFileSystem.cs[m
+-[36m@@ -0,0 +1,15 @@[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IFileSystem[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    string Combine(params string[] paths);[m
+-[32m+[m[32m    string GetTempPath();[m
+-[32m+[m[32m    bool FileExists(string path);[m
+-[32m+[m[32m    bool DirectoryExists(string path);[m
+-[32m+[m[32m    void CreateDirectory(string path);[m
+-[32m+[m[32m    void DeleteDirectory(string path, bool recursive);[m
+-[32m+[m[32m    void MoveDirectory(string sourcePath, string destinationPath);[m
+-[32m+[m[32m    void CopyDirectory(string sourcePath, string destinationPath, bool overwrite);[m
+-[32m+[m[32m    Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default);[m
+-[32m+[m[32m    Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IGitHubService.cs b/ServerOps.Application/Abstractions/IGitHubService.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..cc81cd4[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IGitHubService.cs[m
+-[36m@@ -0,0 +1,8 @@[m
+-[32m+[m[32musing ServerOps.Domain.Entities;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IGitHubService[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<IReadOnlyList<ReleaseInfo>> GetReleasesAsync(string repo, CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IHostService.cs b/ServerOps.Application/Abstractions/IHostService.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..4d8a2f2[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IHostService.cs[m
+-[36m@@ -0,0 +1,10 @@[m
+-[32m+[m[32musing ServerOps.Domain.Entities;[m
+-[32m+[m[32musing ServerOps.Domain.Enums;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IHostService[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    OsType GetCurrentOs();[m
+-[32m+[m[32m    Task<IReadOnlyList<ServiceInfo>> GetServicesAsync(CancellationToken ct = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IManagedAppFilter.cs b/ServerOps.Application/Abstractions/IManagedAppFilter.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..c63022e[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IManagedAppFilter.cs[m
+-[36m@@ -0,0 +1,12 @@[m
+-[32m+[m[32musing ServerOps.Application.Models;[m
+-[32m+[m[32musing ServerOps.Domain.Entities;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IManagedAppFilter[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<IReadOnlyList<ServiceInfo>> FilterAsync([m
+-[32m+[m[32m        IReadOnlyList<ServiceInfo> services,[m
+-[32m+[m[32m        IReadOnlyList<CompanyApp> apps,[m
+-[32m+[m[32m        CancellationToken ct = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IPortService.cs b/ServerOps.Application/Abstractions/IPortService.cs[m
+-[1mnew file mode 100644[m
+-[1mindex 0000000..b53cdcb[m
+-[1m--- /dev/null[m
+-[1m+++ b/ServerOps.Application/Abstractions/IPortService.cs[m
+-[36m@@ -0,0 +1,8 @@[m
+-[32m+[m[32musing ServerOps.Application.DTOs;[m
+-[32m+[m
+-[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+-[32m+[m
+-[32m+[m[32mpublic interface IPortService[m
+-[32m+[m[32m{[m
+-[32m+[m[32m    Task<IReadOnlyList<PortInfo>> GetListeningPortsAsync(CancellationToken cancellationToken = default);[m
+-[32m+[m[32m}[m
+-[1mdiff --git a/ServerOps.Application/Abstractions/IRuntimeEnvironment.
+\ No newline at end of file
+diff --git a/diff.txt b/diff.txt
+index d2aac9f..5b94c5c 100644
+Binary files a/diff.txt and b/diff.txt differ

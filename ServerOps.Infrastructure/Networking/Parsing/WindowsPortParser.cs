@@ -92,12 +92,14 @@ public static class WindowsPortParser
                 }
 
                 return new PortInfo
-                {
-                    Port = port.Port,
-                    ProcessId = port.ProcessId,
-                    ProcessName = processName
-                };
+            {
+                Port = port.Port,
+                ProcessId = port.ProcessId,
+                ProcessName = processName
+            };
             })
+            .GroupBy(x => x.Port)
+            .Select(group => group.First())
             .ToList();
     }
 }

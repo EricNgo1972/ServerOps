@@ -5,6 +5,10 @@ namespace ServerOps.Infrastructure.Networking.Parsing;
 
 public static class LinuxPortParser
 {
+    private static readonly Regex PortRegex = new(@":(\d+)", RegexOptions.Compiled);
+    private static readonly Regex PidRegex = new(@"pid=(\d+)", RegexOptions.Compiled);
+    private static readonly Regex ProcessNameRegex = new("\"([^\"]+)\"", RegexOptions.Compiled);
+
     public static IReadOnlyList<PortInfo> ParseLinuxSs(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
@@ -14,17 +18,15 @@ public static class LinuxPortParser
 
         var ports = new List<PortInfo>();
 
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Skip(1))
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            var parts = Regex.Split(line, @"\s+");
-            if (parts.Length < 5)
+            if (!line.StartsWith("LISTEN", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            var localAddress = parts[3];
-            var portSegment = localAddress[(localAddress.LastIndexOf(':') + 1)..];
-            if (!int.TryParse(portSegment, out var port))
+            var portMatch = PortRegex.Match(line);
+            if (!portMatch.Success || !int.TryParse(portMatch.Groups[1].Value, out var port))
             {
                 continue;
             }
@@ -32,13 +34,13 @@ public static class LinuxPortParser
             int? processId = null;
             var processName = string.Empty;
 
-            var pidMatch = Regex.Match(line, @"pid=(\d+)");
+            var pidMatch = PidRegex.Match(line);
             if (pidMatch.Success && int.TryParse(pidMatch.Groups[1].Value, out var parsedPid))
             {
                 processId = parsedPid;
             }
 
-            var processMatch = Regex.Match(line, "\"([^\"]+)\"");
+            var processMatch = ProcessNameRegex.Match(line);
             if (processMatch.Success)
             {
                 processName = processMatch.Groups[1].Value;
@@ -52,6 +54,9 @@ public static class LinuxPortParser
             });
         }
 
-        return ports;
+        return ports
+            .GroupBy(x => x.Port)
+            .Select(group => group.First())
+            .ToList();
     }
 }

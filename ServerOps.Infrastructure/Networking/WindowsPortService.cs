@@ -33,7 +33,9 @@ public sealed class WindowsPortService
         }
 
         var ports = WindowsPortParser.ParseWindowsNetstat(portResult.StdOut);
-        var servicePids = WindowsPortParser.ParseWindowsServicePids(serviceResult.StdOut);
+        var servicePids = serviceResult.Succeeded
+            ? WindowsPortParser.ParseWindowsServicePids(serviceResult.StdOut)
+            : new Dictionary<int, string>();
 
         return WindowsPortParser.JoinWindowsPorts(ports, servicePids);
     }
