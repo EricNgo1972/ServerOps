@@ -71,6 +71,7 @@ public sealed class DeploymentService : IDeploymentService
         var zipPath = _fileSystem.Combine(tempFolder, $"{appName}.zip");
         var appRoot = _fileSystem.Combine(_runtimeEnvironment.GetAppsRootPath(), appName);
         var currentPath = _fileSystem.Combine(appRoot, "current");
+        var currentTempPath = _fileSystem.Combine(appRoot, "current_tmp");
         var backupPath = _fileSystem.Combine(appRoot, $"backup_{DateTimeOffset.UtcNow:yyyyMMdd_HHmmss}");
         var stagingPath = _fileSystem.Combine(appRoot, "staging");
         var hadCurrent = _fileSystem.DirectoryExists(currentPath);
@@ -133,7 +134,13 @@ public sealed class DeploymentService : IDeploymentService
                     rollbackAvailable = true;
                 }
 
-                _fileSystem.MoveDirectory(stagingPath, currentPath);
+                if (_fileSystem.DirectoryExists(currentTempPath))
+                {
+                    _fileSystem.DeleteDirectory(currentTempPath, recursive: true);
+                }
+
+                _fileSystem.MoveDirectory(stagingPath, currentTempPath);
+                _fileSystem.MoveDirectory(currentTempPath, currentPath);
             }
             catch (Exception ex)
             {
@@ -177,8 +184,8 @@ public sealed class DeploymentService : IDeploymentService
                     cancellationToken);
             }
 
-            var serviceVerified = await VerifyServiceAsync(appName, cancellationToken);
-            if (!serviceVerified)
+            var deploymentVerified = await VerifyDeploymentWithRetryAsync(appName, cancellationToken);
+            if (!deploymentVerified)
             {
                 return await RollbackAsync(
                     deploymentId,
@@ -188,24 +195,11 @@ public sealed class DeploymentService : IDeploymentService
                     backupPath,
                     currentPath,
                     rollbackAvailable,
-                    "Service verification failed after deployment.",
+                    "Deployment verification failed after deployment.",
                     cancellationToken);
             }
 
-            var healthVerified = await VerifyHealthWithRetryAsync(appName, cancellationToken);
-            if (!healthVerified)
-            {
-                return await RollbackAsync(
-                    deploymentId,
-                    appName,
-                    version,
-                    startedAtUtc,
-                    backupPath,
-                    currentPath,
-                    rollbackAvailable,
-                    "Health verification failed after deployment.",
-                    cancellationToken);
-            }
+            CleanupOldBackups(appRoot);
 
             return CreateResult(
                 deploymentId,
@@ -245,29 +239,13 @@ public sealed class DeploymentService : IDeploymentService
             item.Ports.Count > 0);
     }
 
-    private async Task<bool> VerifyHealthWithRetryAsync(string appName, CancellationToken cancellationToken)
+    private async Task<bool> VerifyDeploymentWithRetryAsync(string appName, CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 10; attempt++)
         {
-            if (await _healthVerificationService.VerifyAsync(appName, cancellationToken))
-            {
-                return true;
-            }
-
-            if (attempt < 9)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            }
-        }
-
-        return false;
-    }
-
-    private async Task<bool> VerifyServiceWithRetryAsync(string appName, CancellationToken cancellationToken)
-    {
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            if (await VerifyServiceAsync(appName, cancellationToken))
+            var serviceVerified = await VerifyServiceAsync(appName, cancellationToken);
+            var healthVerified = serviceVerified && await _healthVerificationService.VerifyAsync(appName, cancellationToken);
+            if (healthVerified)
             {
                 return true;
             }
@@ -328,8 +306,8 @@ public sealed class DeploymentService : IDeploymentService
                     DateTimeOffset.UtcNow);
             }
 
-            var serviceVerified = await VerifyServiceWithRetryAsync(appName, cancellationToken);
-            if (!serviceVerified)
+            var deploymentVerified = await VerifyDeploymentWithRetryAsync(appName, cancellationToken);
+            if (!deploymentVerified)
             {
                 return CreateResult(
                     deploymentId,
@@ -337,7 +315,7 @@ public sealed class DeploymentService : IDeploymentService
                     version,
                     DeploymentStatus.Failed,
                     DeploymentStage.Failed,
-                    $"{message} Rollback verification failed.",
+                    "Rollback failed - manual intervention required",
                     startedAtUtc,
                     DateTimeOffset.UtcNow);
             }
@@ -363,6 +341,25 @@ public sealed class DeploymentService : IDeploymentService
                 $"{message} Rollback failed: {ex.Message}",
                 startedAtUtc,
                 DateTimeOffset.UtcNow);
+        }
+    }
+
+    private void CleanupOldBackups(string appRoot)
+    {
+        var backupDirectories = _fileSystem.GetDirectories(appRoot)
+            .Where(path =>
+            {
+                var name = Path.GetFileName(path);
+                return !string.IsNullOrWhiteSpace(name)
+                    && name.StartsWith("backup_", StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderByDescending(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+            .Skip(5)
+            .ToList();
+
+        foreach (var backupDirectory in backupDirectories)
+        {
+            _fileSystem.DeleteDirectory(backupDirectory, recursive: true);
         }
     }
 

@@ -387,6 +387,16 @@ public sealed class DeploymentServiceTests
                 _files[Combine(destinationPath, relative)] = file.Value.ToArray();
             }
         }
+        public IReadOnlyList<string> GetDirectories(string path)
+        {
+            return _directories
+                .Where(item =>
+                {
+                    var parent = Path.GetDirectoryName(item)?.Replace('\\', '/') ?? "/";
+                    return string.Equals(parent, path, StringComparison.OrdinalIgnoreCase);
+                })
+                .ToList();
+        }
         public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive)
         {
             return _files.Keys

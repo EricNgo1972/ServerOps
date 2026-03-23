@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using ServerOps.Application.Abstractions;
 using ServerOps.Domain.Enums;
 
@@ -44,8 +45,38 @@ public sealed class HealthVerificationService : IHealthVerificationService
         var service = topology.FirstOrDefault(item =>
             string.Equals(item.ServiceName, appName, StringComparison.OrdinalIgnoreCase));
 
-        return service is not null
-            && service.Status == ServiceStatus.Running
-            && service.Ports.Count > 0;
+        if (service is null || service.Status != ServiceStatus.Running || service.Ports.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var port in service.Ports)
+        {
+            if (await CanConnectAsync(port, ct))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task<bool> CanConnectAsync(int port, CancellationToken ct)
+    {
+        if (port <= 0)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var tcpClient = new TcpClient();
+            await tcpClient.ConnectAsync("127.0.0.1", port, ct);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

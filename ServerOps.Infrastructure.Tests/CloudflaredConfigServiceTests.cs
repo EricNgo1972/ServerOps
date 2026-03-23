@@ -99,6 +99,7 @@ ingress:
         public void DeleteDirectory(string path, bool recursive) { }
         public void MoveDirectory(string sourcePath, string destinationPath) { }
         public void CopyDirectory(string sourcePath, string destinationPath, bool overwrite) { }
+        public IReadOnlyList<string> GetDirectories(string path) => Array.Empty<string>();
         public IReadOnlyList<string> GetFiles(string path, string searchPattern, bool recursive) => Array.Empty<string>();
         public Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default)
         {
