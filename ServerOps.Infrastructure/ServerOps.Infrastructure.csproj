@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Azure.Data.Tables" Version="12.9.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ServerOps.Application\ServerOps.Application.csproj" />
+    <ProjectReference Include="..\ServerOps.Domain\ServerOps.Domain.csproj" />
+    <ProjectReference Include="..\ServerOps.Scripts\ServerOps.Scripts.csproj" />
+  </ItemGroup>
+</Project>

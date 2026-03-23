@@ -1,0 +1,72 @@
+@page "/app/{Name}"
+@inject IAppCatalogService AppCatalogService
+
+<PageTitle>Application Details</PageTitle>
+
+<h1>@Name</h1>
+
+@if (_details is null)
+{
+    <p>Application not found.</p>
+}
+else
+{
+    <section class="card-grid">
+        <article class="card">
+            <h2>Overview</h2>
+            <p>Status: @_details.App.Status</p>
+            <p>OS: @_details.App.OsType</p>
+            <p>Version: @_details.App.Version</p>
+            <p>Health: @(string.IsNullOrWhiteSpace(_details.App.HealthUrl) ? "Unavailable" : _details.App.HealthUrl)</p>
+        </article>
+
+        <article class="card">
+            <h2>Ports</h2>
+            @if (_details.Ports.Count == 0)
+            {
+                <p>No listening ports matched.</p>
+            }
+            else
+            {
+                <ul>
+                    @foreach (var port in _details.Ports)
+                    {
+                        <li>@port.Port (@port.ProcessName, PID: @(port.ProcessId?.ToString() ?? "-"))</li>
+                    }
+                </ul>
+            }
+        </article>
+
+        <article class="card">
+            <h2>Tunnel</h2>
+            <p>Running: @_details.Tunnel.IsRunning</p>
+            <p>Tunnel ID: @(string.IsNullOrWhiteSpace(_details.Tunnel.TunnelId) ? "Unavailable" : _details.Tunnel.TunnelId)</p>
+            <p>Config: @_details.Tunnel.ConfigPath</p>
+            @if (_details.Tunnel.IngressRules.Count == 0)
+            {
+                <p>No ingress rules found.</p>
+            }
+            else
+            {
+                <ul>
+                    @foreach (var rule in _details.Tunnel.IngressRules)
+                    {
+                        <li>@rule</li>
+                    }
+                </ul>
+            }
+        </article>
+    </section>
+}
+
+@code {
+    [Parameter]
+    public string Name { get; set; } = string.Empty;
+
+    private AppDetailsDto? _details;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _details = await AppCatalogService.GetApplicationAsync(Name);
+    }
+}

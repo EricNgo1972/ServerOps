@@ -1,0 +1,80 @@
+@page "/releases"
+@inject IGitHubService GitHubService
+@inject IDeploymentService DeploymentService
+
+<PageTitle>Releases</PageTitle>
+
+<h1>GitHub Releases</h1>
+
+<EditForm Model="_query" OnValidSubmit="SearchAsync">
+    <div class="form-row">
+        <label for="repo">Repository</label>
+        <InputText id="repo" @bind-Value="_query.Repo" />
+    </div>
+    <div class="form-row">
+        <label for="app">Application Name</label>
+        <InputText id="app" @bind-Value="_deployment.AppName" />
+    </div>
+    <button type="submit">Load Releases</button>
+</EditForm>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <p class="message">@_message</p>
+}
+
+@if (_releases.Count > 0)
+{
+    <div class="release-list">
+        @foreach (var release in _releases)
+        {
+            <article class="card">
+                <h2>@(string.IsNullOrWhiteSpace(release.Name) ? release.Tag : release.Name)</h2>
+                <p>Tag: @release.Tag</p>
+                <p>Published: @release.PublishedAt.ToLocalTime()</p>
+
+                @if (release.Assets.Count == 0)
+                {
+                    <p>No assets.</p>
+                }
+                else
+                {
+                    <ul>
+                        @foreach (var asset in release.Assets)
+                        {
+                            <li>
+                                @asset.Name (@asset.Size bytes)
+                                <button @onclick="() => DeployAsync(asset.DownloadUrl)">Deploy</button>
+                            </li>
+                        }
+                    </ul>
+                }
+            </article>
+        }
+    </div>
+}
+
+@code {
+    private readonly ReleaseQueryDto _query = new();
+    private readonly DeploymentRequestDto _deployment = new();
+    private List<ReleaseInfo> _releases = [];
+    private string _message = string.Empty;
+
+    private async Task SearchAsync()
+    {
+        _releases = (await GitHubService.GetReleasesAsync(_query.Repo)).ToList();
+        _message = _releases.Count == 0 ? "No releases found." : string.Empty;
+    }
+
+    private async Task DeployAsync(string assetUrl)
+    {
+        if (string.IsNullOrWhiteSpace(_deployment.AppName))
+        {
+            _message = "Application name is required.";
+            return;
+        }
+
+        var record = await DeploymentService.DeployAsync(_deployment.AppName, assetUrl);
+        _message = $"{record.AppName} deployment {record.Status} at {record.Timestamp.LocalDateTime}.";
+    }
+}

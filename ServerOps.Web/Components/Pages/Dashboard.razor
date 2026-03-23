@@ -1,0 +1,48 @@
+@page "/"
+@page "/dashboard"
+@inject IAppCatalogService AppCatalogService
+
+<PageTitle>Dashboard</PageTitle>
+
+<h1>Services</h1>
+
+@if (_apps.Count == 0)
+{
+    <p>No services discovered.</p>
+}
+else
+{
+    <table class="data-grid">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Ports</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var app in _apps)
+            {
+                <tr>
+                    <td><a href="/app/@app.ServiceName">@app.DisplayName</a></td>
+                    <td><span class="status @app.Status.ToString().ToLowerInvariant()">@app.Status</span></td>
+                    <td>@(app.Ports.Count == 0 ? "-" : string.Join(", ", app.Ports))</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<AppInstance> _apps = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _apps = (await AppCatalogService.GetApplicationsAsync()).ToList();
+    }
+}
