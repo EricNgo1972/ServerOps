@@ -23,6 +23,7 @@ public sealed class ManagedAppFilterTests
         {
             new ServiceInfo { Name = "phoebus-api", Status = ServiceStatus.Running },
             new ServiceInfo { Name = "phoebus-worker", Status = ServiceStatus.Running },
+            new ServiceInfo { Name = "phoebus2", Status = ServiceStatus.Running },
             new ServiceInfo { Name = "nginx", Status = ServiceStatus.Running },
             new ServiceInfo { Name = "ocr", Status = ServiceStatus.Running }
         };

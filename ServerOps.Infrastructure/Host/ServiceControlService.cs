@@ -6,8 +6,8 @@ namespace ServerOps.Infrastructure.Host;
 
 public sealed class ServiceControlService : IServiceControlService
 {
-    private const int WindowsStopPollDelayMilliseconds = 200;
-    private const int WindowsStopPollAttempts = 20;
+    private const int WindowsStopPollDelayMilliseconds = 500;
+    private const int WindowsStopPollAttempts = 10;
 
     private readonly ICommandRunner _commandRunner;
     private readonly IRuntimeEnvironment _runtimeEnvironment;
@@ -26,14 +26,12 @@ public sealed class ServiceControlService : IServiceControlService
             ? _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "sc",
-                Arguments = ["start", validatedName],
-                Allowed = true
+                Arguments = ["start", validatedName]
             }, ct)
             : _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "systemctl",
-                Arguments = ["start", validatedName],
-                Allowed = true
+                Arguments = ["start", validatedName]
             }, ct);
     }
 
@@ -45,14 +43,12 @@ public sealed class ServiceControlService : IServiceControlService
             ? _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "sc",
-                Arguments = ["stop", validatedName],
-                Allowed = true
+                Arguments = ["stop", validatedName]
             }, ct)
             : _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "systemctl",
-                Arguments = ["stop", validatedName],
-                Allowed = true
+                Arguments = ["stop", validatedName]
             }, ct);
     }
 
@@ -65,16 +61,14 @@ public sealed class ServiceControlService : IServiceControlService
             return await _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "systemctl",
-                Arguments = ["restart", validatedName],
-                Allowed = true
+                Arguments = ["restart", validatedName]
             }, ct);
         }
 
         var stopResult = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "sc",
-            Arguments = ["stop", validatedName],
-            Allowed = true
+            Arguments = ["stop", validatedName]
         }, ct);
 
         if (!stopResult.Succeeded)
@@ -82,52 +76,43 @@ public sealed class ServiceControlService : IServiceControlService
             return stopResult;
         }
 
-        var waitResult = await WaitForWindowsServiceStoppedAsync(validatedName, ct);
-        if (!waitResult.Succeeded)
+        var stopped = await WaitForStopped(validatedName, ct);
+        if (!stopped)
         {
-            return waitResult;
+            return stopResult;
         }
 
         return await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "sc",
-            Arguments = ["start", validatedName],
-            Allowed = true
+            Arguments = ["start", validatedName]
         }, ct);
     }
 
-    private async Task<CommandResult> WaitForWindowsServiceStoppedAsync(string serviceName, CancellationToken ct)
+    private async Task<bool> WaitForStopped(string serviceName, CancellationToken ct)
     {
         for (var attempt = 0; attempt < WindowsStopPollAttempts; attempt++)
         {
             var queryResult = await _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "sc",
-                Arguments = ["query", serviceName],
-                Allowed = true
+                Arguments = ["query", serviceName]
             }, ct);
 
             if (!queryResult.Succeeded)
             {
-                return queryResult;
+                return false;
             }
 
             var state = ParseWindowsState(queryResult.StdOut);
             if (state == WindowsServiceQueryState.Stopped)
             {
-                return queryResult;
+                return true;
             }
 
             if (state == WindowsServiceQueryState.Failed)
             {
-                return new CommandResult
-                {
-                    ExitCode = 1,
-                    StdOut = queryResult.StdOut,
-                    StdErr = string.IsNullOrWhiteSpace(queryResult.StdErr)
-                        ? "Service entered a failed state while stopping."
-                        : queryResult.StdErr
-                };
+                return false;
             }
 
             if (attempt < WindowsStopPollAttempts - 1)
@@ -136,11 +121,7 @@ public sealed class ServiceControlService : IServiceControlService
             }
         }
 
-        return new CommandResult
-        {
-            ExitCode = 1,
-            StdErr = $"Timed out waiting for service '{serviceName}' to stop."
-        };
+        return false;
     }
 
     private static WindowsServiceQueryState ParseWindowsState(string output)

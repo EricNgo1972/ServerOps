@@ -19,8 +19,7 @@ public sealed class WindowsHostService
         var result = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "sc",
-            Arguments = ["query", "type=service", "state=all"],
-            Allowed = true
+            Arguments = ["query", "type=service", "state=all"]
         }, ct);
 
         if (!result.Succeeded)

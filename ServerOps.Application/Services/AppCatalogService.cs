@@ -99,8 +99,7 @@ public sealed class AppCatalogService : IAppCatalogService
             .FirstOrDefault(app =>
             {
                 var normalizedAppName = ManagedAppFilter.Normalize(app.Name);
-                return string.Equals(normalizedServiceName, normalizedAppName, StringComparison.Ordinal) ||
-                       normalizedServiceName.StartsWith(normalizedAppName, StringComparison.Ordinal);
+                return ManagedAppFilter.IsMatch(normalizedServiceName, normalizedAppName);
             });
     }
 

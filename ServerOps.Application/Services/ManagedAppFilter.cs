@@ -46,9 +46,7 @@ public sealed class ManagedAppFilter : IManagedAppFilter
             }
 
             var matchedApp = normalizedApps
-                .FirstOrDefault(app =>
-                    string.Equals(normalizedServiceName, app.NormalizedName, StringComparison.Ordinal) ||
-                    normalizedServiceName.StartsWith(app.NormalizedName, StringComparison.Ordinal));
+                .FirstOrDefault(app => IsMatch(normalizedServiceName, app.NormalizedName));
 
             if (matchedApp is null)
             {
@@ -75,6 +73,18 @@ public sealed class ManagedAppFilter : IManagedAppFilter
         }
 
         return normalized.Trim();
+    }
+
+    internal static bool IsMatch(string normalizedServiceName, string normalizedAppName)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedServiceName) || string.IsNullOrWhiteSpace(normalizedAppName))
+        {
+            return false;
+        }
+
+        return string.Equals(normalizedServiceName, normalizedAppName, StringComparison.Ordinal) ||
+               normalizedServiceName.StartsWith($"{normalizedAppName}-", StringComparison.Ordinal) ||
+               normalizedServiceName.StartsWith($"{normalizedAppName}.", StringComparison.Ordinal);
     }
 
     private sealed record NormalizedApp(CompanyApp App, string NormalizedName);

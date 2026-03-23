@@ -31,15 +31,6 @@ public sealed class CommandRunner : ICommandRunner
 
     public async Task<CommandResult> RunAsync(CommandRequest request, CancellationToken cancellationToken = default)
     {
-        if (!request.Allowed)
-        {
-            return new CommandResult
-            {
-                ExitCode = -1,
-                StdErr = "Command request was not explicitly marked as allowed."
-            };
-        }
-
         if (string.IsNullOrWhiteSpace(request.Command))
         {
             return new CommandResult

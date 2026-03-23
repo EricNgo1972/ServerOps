@@ -1,0 +1,376 @@
+[33mcommit 3cf224b38b311b81119002fa9ff68ff1e3df2df7[m[33m ([m[1;36mHEAD -> [m[1;32mmaster[m[33m)[m
+Author: Tung Ngo <ngo-thanh.tung@spc-technology.com>
+Date:   Mon Mar 23 03:19:04 2026 -0400
+
+    initial commit - module 1 to 4
+
+[1mdiff --git a/.gitignore b/.gitignore[m
+[1mnew file mode 100644[m
+[1mindex 0000000..bf98ae1[m
+[1m--- /dev/null[m
+[1m+++ b/.gitignore[m
+[36m@@ -0,0 +1,16 @@[m
+[32m+[m[32m# Visual Studio[m
+[32m+[m[32m.vs/[m
+[32m+[m[32m*.user[m
+[32m+[m[32m*.suo[m
+[32m+[m
+[32m+[m[32m# Build output[m
+[32m+[m[32mbin/[m
+[32m+[m[32mobj/[m
+[32m+[m
+[32m+[m[32m# Rider / VS Code (optional)[m
+[32m+[m[32m.idea/[m
+[32m+[m[32m.vscode/[m
+[32m+[m
+[32m+[m[32m# OS[m
+[32m+[m[32m.DS_Store[m
+[32m+[m[32mThumbs.db[m
+\ No newline at end of file[m
+[1mdiff --git a/AGENTS.md b/AGENTS.md[m
+[1mnew file mode 100644[m
+[1mindex 0000000..29b9c85[m
+[1m--- /dev/null[m
+[1m+++ b/AGENTS.md[m
+[36m@@ -0,0 +1,79 @@[m
+[32m+[m[32m# ServerOps AI Agent Rules (Minimal)[m
+[32m+[m
+[32m+[m[32m## PRIMARY GOAL[m
+[32m+[m[32mBuild a minimal cross-platform (.NET 8) Blazor Server app to:[m
+[32m+[m[32m- Discover and manage system services[m
+[32m+[m[32m- Integrate with cloudflared tunnels[m
+[32m+[m[32m- Deploy apps from GitHub releases[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## ARCHITECTURE[m
+[32m+[m
+[32m+[m[32mUse simple layered structure:[m
+[32m+[m
+[32m+[m[32m- Domain → models only[m
+[32m+[m[32m- Application → interfaces + logic[m
+[32m+[m[32m- Infrastructure → OS + external integrations[m
+[32m+[m[32m- Web → UI only[m
+[32m+[m
+[32m+[m[32mSTRICT:[m
+[32m+[m[32m- No cross-layer violations[m
+[32m+[m[32m- No direct shell execution in UI[m
+[32m+[m[32m- All commands go through ICommandRunner[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## PLATFORM SUPPORT[m
+[32m+[m
+[32m+[m[32mMust support:[m
+[32m+[m[32m- Linux[m
+[32m+[m[32m- Windows[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## COMMAND RULES[m
+[32m+[m
+[32m+[m[32m- No arbitrary shell execution[m
+[32m+[m[32m- Only predefined commands allowed[m
+[32m+[m
+[32m+[m[32mAllowed:[m
+[32m+[m[32m- systemctl[m
+[32m+[m[32m- sc[m
+[32m+[m[32m- net[m
+[32m+[m[32m- cloudflared[m
+[32m+[m[32m- ss / netstat[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## DEPLOYMENT RULES[m
+[32m+[m
+[32m+[m[32mDeployment steps:[m
+[32m+[m[32m1. Stop service[m
+[32m+[m[32m2. Backup current version[m
+[32m+[m[32m3. Deploy new version[m
+[32m+[m[32m4. Start service[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## UI RULES[m
+[32m+[m
+[32m+[m[32m- Blazor Server only[m
+[32m+[m[32m- Keep UI simple and functional[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## CODING RULES[m
+[32m+[m
+[32m+[m[32m- Use dependency injection[m
+[32m+[m[32m- Use async/await[m
+[32m+[m[32m- No hardcoded paths[m
+[32m+[m[32m- Keep implementation minimal[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## OUTPUT RULES[m
+[32m+[m
+[32m+[m[32m- Generate complete working files[m
+[32m+[m[32m- No TODO[m
+[32m+[m[32m- No pseudo-code[m
+[1mdiff --git a/ServerOps.Application.Tests/ManagedAppFilterTests.cs b/ServerOps.Application.Tests/ManagedAppFilterTests.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..ea9dfc1[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application.Tests/ManagedAppFilterTests.cs[m
+[36m@@ -0,0 +1,53 @@[m
+[32m+[m[32musing ServerOps.Application.Models;[m
+[32m+[m[32musing ServerOps.Application.Services;[m
+[32m+[m[32musing ServerOps.Domain.Entities;[m
+[32m+[m[32musing ServerOps.Domain.Enums;[m
+[32m+[m[32musing Xunit;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Tests;[m
+[32m+[m
+[32m+[m[32mpublic sealed class ManagedAppFilterTests[m
+[32m+[m[32m{[m
+[32m+[m[32m    private readonly ManagedAppFilter _filter = new();[m
+[32m+[m
+[32m+[m[32m    [Fact][m
+[32m+[m[32m    public async Task FilterAsync_Returns_Only_Matching_App_Services()[m
+[32m+[m[32m    {[m
+[32m+[m[32m        var apps = new[][m
+[32m+[m[32m        {[m
+[32m+[m[32m            new CompanyApp { Id = "phoebus", Name = "phoebus" },[m
+[32m+[m[32m            new CompanyApp { Id = "ocr", Name = "ocr" }[m
+[32m+[m[32m        };[m
+[32m+[m
+[32m+[m[32m        var services = new[][m
+[32m+[m[32m        {[m
+[32m+[m[32m            new ServiceInfo { Name = "phoebus-api", Status = ServiceStatus.Running },[m
+[32m+[m[32m            new ServiceInfo { Name = "phoebus-worker", Status = ServiceStatus.Running },[m
+[32m+[m[32m            new ServiceInfo { Name = "nginx", Status = ServiceStatus.Running },[m
+[32m+[m[32m            new ServiceInfo { Name = "ocr", Status = ServiceStatus.Running }[m
+[32m+[m[32m        };[m
+[32m+[m
+[32m+[m[32m        var matches = await _filter.FilterAsync(services, apps);[m
+[32m+[m
+[32m+[m[32m        Assert.Equal(new[] { "phoebus-api", "phoebus-worker", "ocr" }, matches.Select(x => x.Name).ToArray());[m
+[32m+[m[32m    }[m
+[32m+[m
+[32m+[m[32m    [Fact][m
+[32m+[m[32m    public async Task FilterAsync_Is_Case_Insensitive_And_Removes_Service_Suffix()[m
+[32m+[m[32m    {[m
+[32m+[m[32m        var apps = new[][m
+[32m+[m[32m        {[m
+[32m+[m[32m            new CompanyApp { Id = "phoebus", Name = "PHOEBUS" }[m
+[32m+[m[32m        };[m
+[32m+[m
+[32m+[m[32m        var services = new[][m
+[32m+[m[32m        {[m
+[32m+[m[32m            new ServiceInfo { Name = "phoebus.service", Status = ServiceStatus.Running }[m
+[32m+[m[32m        };[m
+[32m+[m
+[32m+[m[32m        var matches = await _filter.FilterAsync(services, apps);[m
+[32m+[m
+[32m+[m[32m        var match = Assert.Single(matches);[m
+[32m+[m[32m        Assert.Equal("phoebus.service", match.Name);[m
+[32m+[m[32m    }[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application.Tests/ServerOps.Application.Tests.csproj b/ServerOps.Application.Tests/ServerOps.Application.Tests.csproj[m
+[1mnew file mode 100644[m
+[1mindex 0000000..b098243[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application.Tests/ServerOps.Application.Tests.csproj[m
+[36m@@ -0,0 +1,24 @@[m
+[32m+[m[32m<Project Sdk="Microsoft.NET.Sdk">[m
+[32m+[m[32m  <PropertyGroup>[m
+[32m+[m[32m    <TargetFramework>net8.0</TargetFramework>[m
+[32m+[m[32m    <ImplicitUsings>enable</ImplicitUsings>[m
+[32m+[m[32m    <Nullable>enable</Nullable>[m
+[32m+[m[32m    <IsPackable>false</IsPackable>[m
+[32m+[m[32m  </PropertyGroup>[m
+[32m+[m[32m  <ItemGroup>[m
+[32m+[m[32m    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />[m
+[32m+[m[32m    <PackageReference Include="xunit" Version="2.9.2" />[m
+[32m+[m[32m    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">[m
+[32m+[m[32m      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>[m
+[32m+[m[32m      <PrivateAssets>all</PrivateAssets>[m
+[32m+[m[32m    </PackageReference>[m
+[32m+[m[32m    <PackageReference Include="coverlet.collector" Version="6.0.2">[m
+[32m+[m[32m      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>[m
+[32m+[m[32m      <PrivateAssets>all</PrivateAssets>[m
+[32m+[m[32m    </PackageReference>[m
+[32m+[m[32m  </ItemGroup>[m
+[32m+[m[32m  <ItemGroup>[m
+[32m+[m[32m    <ProjectReference Include="..\ServerOps.Application\ServerOps.Application.csproj" />[m
+[32m+[m[32m    <ProjectReference Include="..\ServerOps.Domain\ServerOps.Domain.csproj" />[m
+[32m+[m[32m  </ItemGroup>[m
+[32m+[m[32m</Project>[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IAppCatalogService.cs b/ServerOps.Application/Abstractions/IAppCatalogService.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..5822381[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IAppCatalogService.cs[m
+[36m@@ -0,0 +1,10 @@[m
+[32m+[m[32musing ServerOps.Application.DTOs;[m
+[32m+[m[32musing ServerOps.Domain.Entities;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IAppCatalogService[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<IReadOnlyList<AppInstance>> GetApplicationsAsync(CancellationToken cancellationToken = default);[m
+[32m+[m[32m    Task<AppDetailsDto?> GetApplicationAsync(string serviceName, CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IArchiveService.cs b/ServerOps.Application/Abstractions/IArchiveService.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..6f381af[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IArchiveService.cs[m
+[36m@@ -0,0 +1,6 @@[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IArchiveService[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task ExtractZipAsync(string zipPath, string destinationPath, CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/ICloudflaredService.cs b/ServerOps.Application/Abstractions/ICloudflaredService.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..266b2dc[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/ICloudflaredService.cs[m
+[36m@@ -0,0 +1,13 @@[m
+[32m+[m[32musing ServerOps.Application.DTOs;[m
+[32m+[m[32musing ServerOps.Domain.Entities;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface ICloudflaredService[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<bool> IsInstalledAsync(CancellationToken cancellationToken = default);[m
+[32m+[m[32m    Task<bool> IsRunningAsync(CancellationToken cancellationToken = default);[m
+[32m+[m[32m    Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default);[m
+[32m+[m[32m    Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default);[m
+[32m+[m[32m    Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/ICommandRunner.cs b/ServerOps.Application/Abstractions/ICommandRunner.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..fedc3d8[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/ICommandRunner.cs[m
+[36m@@ -0,0 +1,8 @@[m
+[32m+[m[32musing ServerOps.Application.DTOs;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface ICommandRunner[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<CommandResult> RunAsync(CommandRequest request, CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/ICompanyAppRegistry.cs b/ServerOps.Application/Abstractions/ICompanyAppRegistry.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..26aca45[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/ICompanyAppRegistry.cs[m
+[36m@@ -0,0 +1,8 @@[m
+[32m+[m[32musing ServerOps.Application.Models;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface ICompanyAppRegistry[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<IReadOnlyList<CompanyApp>> GetAppsAsync(CancellationToken ct = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IDeploymentService.cs b/ServerOps.Application/Abstractions/IDeploymentService.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..1701746[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IDeploymentService.cs[m
+[36m@@ -0,0 +1,8 @@[m
+[32m+[m[32musing ServerOps.Domain.Entities;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IDeploymentService[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<DeploymentRecord> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IFileSystem.cs b/ServerOps.Application/Abstractions/IFileSystem.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..2ca7f55[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IFileSystem.cs[m
+[36m@@ -0,0 +1,15 @@[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IFileSystem[m
+[32m+[m[32m{[m
+[32m+[m[32m    string Combine(params string[] paths);[m
+[32m+[m[32m    string GetTempPath();[m
+[32m+[m[32m    bool FileExists(string path);[m
+[32m+[m[32m    bool DirectoryExists(string path);[m
+[32m+[m[32m    void CreateDirectory(string path);[m
+[32m+[m[32m    void DeleteDirectory(string path, bool recursive);[m
+[32m+[m[32m    void MoveDirectory(string sourcePath, string destinationPath);[m
+[32m+[m[32m    void CopyDirectory(string sourcePath, string destinationPath, bool overwrite);[m
+[32m+[m[32m    Task WriteAllBytesAsync(string path, byte[] bytes, CancellationToken cancellationToken = default);[m
+[32m+[m[32m    Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IGitHubService.cs b/ServerOps.Application/Abstractions/IGitHubService.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..cc81cd4[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IGitHubService.cs[m
+[36m@@ -0,0 +1,8 @@[m
+[32m+[m[32musing ServerOps.Domain.Entities;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IGitHubService[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<IReadOnlyList<ReleaseInfo>> GetReleasesAsync(string repo, CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IHostService.cs b/ServerOps.Application/Abstractions/IHostService.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..4d8a2f2[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IHostService.cs[m
+[36m@@ -0,0 +1,10 @@[m
+[32m+[m[32musing ServerOps.Domain.Entities;[m
+[32m+[m[32musing ServerOps.Domain.Enums;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IHostService[m
+[32m+[m[32m{[m
+[32m+[m[32m    OsType GetCurrentOs();[m
+[32m+[m[32m    Task<IReadOnlyList<ServiceInfo>> GetServicesAsync(CancellationToken ct = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IManagedAppFilter.cs b/ServerOps.Application/Abstractions/IManagedAppFilter.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..c63022e[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IManagedAppFilter.cs[m
+[36m@@ -0,0 +1,12 @@[m
+[32m+[m[32musing ServerOps.Application.Models;[m
+[32m+[m[32musing ServerOps.Domain.Entities;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IManagedAppFilter[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<IReadOnlyList<ServiceInfo>> FilterAsync([m
+[32m+[m[32m        IReadOnlyList<ServiceInfo> services,[m
+[32m+[m[32m        IReadOnlyList<CompanyApp> apps,[m
+[32m+[m[32m        CancellationToken ct = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IPortService.cs b/ServerOps.Application/Abstractions/IPortService.cs[m
+[1mnew file mode 100644[m
+[1mindex 0000000..b53cdcb[m
+[1m--- /dev/null[m
+[1m+++ b/ServerOps.Application/Abstractions/IPortService.cs[m
+[36m@@ -0,0 +1,8 @@[m
+[32m+[m[32musing ServerOps.Application.DTOs;[m
+[32m+[m
+[32m+[m[32mnamespace ServerOps.Application.Abstractions;[m
+[32m+[m
+[32m+[m[32mpublic interface IPortService[m
+[32m+[m[32m{[m
+[32m+[m[32m    Task<IReadOnlyList<PortInfo>> GetListeningPortsAsync(CancellationToken cancellationToken = default);[m
+[32m+[m[32m}[m
+[1mdiff --git a/ServerOps.Application/Abstractions/IRuntimeEnvironment.

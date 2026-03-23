@@ -19,8 +19,7 @@ public sealed class LinuxHostService
         var result = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "systemctl",
-            Arguments = ["list-units", "--type=service", "--all", "--no-legend", "--no-pager"],
-            Allowed = true
+            Arguments = ["list-units", "--type=service", "--all", "--no-legend", "--no-pager"]
         }, ct);
 
         if (!result.Succeeded)

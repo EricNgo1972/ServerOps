@@ -87,7 +87,7 @@ public sealed class DeploymentService : IDeploymentService
         }
         catch (Exception ex)
         {
-            _ = ex;
+            var _ = ex.Message;
             return record with { Status = DeploymentStatus.Failed };
         }
     }

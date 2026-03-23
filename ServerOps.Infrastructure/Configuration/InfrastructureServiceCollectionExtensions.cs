@@ -30,7 +30,6 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddSingleton<LinuxHostService>();
         services.AddSingleton<WindowsHostService>();
-        services.AddSingleton<ServiceControlService>();
         services.AddSingleton<LinuxPortService>();
         services.AddSingleton<WindowsPortService>();
 

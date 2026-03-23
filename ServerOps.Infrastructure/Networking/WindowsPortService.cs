@@ -17,15 +17,13 @@ public sealed class WindowsPortService
         var portResult = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "netstat",
-            Arguments = ["-ano", "-p", "tcp"],
-            Allowed = true
+            Arguments = ["-ano", "-p", "tcp"]
         }, cancellationToken);
 
         var serviceResult = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "sc",
-            Arguments = ["queryex", "state=", "all"],
-            Allowed = true
+            Arguments = ["queryex", "state=", "all"]
         }, cancellationToken);
 
         if (!portResult.Succeeded)

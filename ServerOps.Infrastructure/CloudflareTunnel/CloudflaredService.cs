@@ -26,8 +26,7 @@ public sealed class CloudflaredService : ICloudflaredService
         var result = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "cloudflared",
-            Arguments = ["--version"],
-            Allowed = true
+            Arguments = ["--version"]
         }, cancellationToken);
 
         return result.Succeeded;
@@ -36,8 +35,8 @@ public sealed class CloudflaredService : ICloudflaredService
     public async Task<bool> IsRunningAsync(CancellationToken cancellationToken = default)
     {
         var result = _runtimeEnvironment.GetCurrentOs() == OsType.Windows
-            ? await _commandRunner.RunAsync(new CommandRequest { Command = "sc", Arguments = ["query", "cloudflared"], Allowed = true }, cancellationToken)
-            : await _commandRunner.RunAsync(new CommandRequest { Command = "systemctl", Arguments = ["status", "cloudflared", "--no-pager"], Allowed = true }, cancellationToken);
+            ? await _commandRunner.RunAsync(new CommandRequest { Command = "sc", Arguments = ["query", "cloudflared"] }, cancellationToken)
+            : await _commandRunner.RunAsync(new CommandRequest { Command = "systemctl", Arguments = ["status", "cloudflared", "--no-pager"] }, cancellationToken);
 
         return result.StdOut.Contains("RUNNING", StringComparison.OrdinalIgnoreCase) ||
                result.StdOut.Contains("active (running)", StringComparison.OrdinalIgnoreCase);
@@ -97,8 +96,7 @@ public sealed class CloudflaredService : ICloudflaredService
         var installResult = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "cloudflared",
-            Arguments = ["service", "install"],
-            Allowed = true
+            Arguments = ["service", "install"]
         }, cancellationToken);
 
         if (!installResult.Succeeded)
@@ -107,8 +105,8 @@ public sealed class CloudflaredService : ICloudflaredService
         }
 
         return _runtimeEnvironment.GetCurrentOs() == OsType.Windows
-            ? await _commandRunner.RunAsync(new CommandRequest { Command = "sc", Arguments = ["start", "cloudflared"], Allowed = true }, cancellationToken)
-            : await _commandRunner.RunAsync(new CommandRequest { Command = "systemctl", Arguments = ["start", "cloudflared"], Allowed = true }, cancellationToken);
+            ? await _commandRunner.RunAsync(new CommandRequest { Command = "sc", Arguments = ["start", "cloudflared"] }, cancellationToken)
+            : await _commandRunner.RunAsync(new CommandRequest { Command = "systemctl", Arguments = ["start", "cloudflared"] }, cancellationToken);
     }
 
     public async Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default)
@@ -116,12 +114,12 @@ public sealed class CloudflaredService : ICloudflaredService
         if (_runtimeEnvironment.GetCurrentOs() != OsType.Windows)
         {
             return await _commandRunner.RunAsync(
-                new CommandRequest { Command = "systemctl", Arguments = ["restart", "cloudflared"], Allowed = true },
+                new CommandRequest { Command = "systemctl", Arguments = ["restart", "cloudflared"] },
                 cancellationToken);
         }
 
         var stopResult = await _commandRunner.RunAsync(
-            new CommandRequest { Command = "sc", Arguments = ["stop", "cloudflared"], Allowed = true },
+            new CommandRequest { Command = "sc", Arguments = ["stop", "cloudflared"] },
             cancellationToken);
 
         if (!stopResult.Succeeded)
@@ -130,7 +128,7 @@ public sealed class CloudflaredService : ICloudflaredService
         }
 
         return await _commandRunner.RunAsync(
-            new CommandRequest { Command = "sc", Arguments = ["start", "cloudflared"], Allowed = true },
+            new CommandRequest { Command = "sc", Arguments = ["start", "cloudflared"] },
             cancellationToken);
     }
 }

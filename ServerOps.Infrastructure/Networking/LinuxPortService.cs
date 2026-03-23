@@ -18,8 +18,7 @@ public sealed class LinuxPortService
         var result = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "ss",
-            Arguments = ["-ltnp"],
-            Allowed = true
+            Arguments = ["-ltnp"]
         }, cancellationToken);
 
         if (!result.Succeeded)
