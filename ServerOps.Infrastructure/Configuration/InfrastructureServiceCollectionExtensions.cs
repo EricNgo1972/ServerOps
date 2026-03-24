@@ -22,6 +22,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.Configure<GitHubOptions>(configuration.GetSection("GitHub"));
         services.Configure<PathsOptions>(configuration.GetSection("Paths"));
         services.Configure<ServiceRegistrationOptions>(configuration.GetSection("ServiceRegistration"));
+        services.Configure<DomainOptions>(configuration.GetSection("Domain"));
 
         services.AddMemoryCache();
         services.AddSingleton<ICommandRunner, CommandRunner>();
@@ -42,6 +43,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IConnectivityService, ConnectivityService>();
         services.AddSingleton<ICloudflaredService, CloudflaredService>();
         services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
+        services.AddSingleton<IOperationLogStream, NullOperationLogStream>();
         services.AddSingleton<IOperationLogger, FileOperationLogger>();
         services.AddSingleton<ILogService, FileLogService>();
         services.AddSingleton<IDeploymentPackageValidator, DeploymentPackageValidator>();
@@ -54,7 +56,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();
         services.AddSingleton<IAppTopologyService, AppTopologyService>();
-        services.AddSingleton<IEndpointRegistry, InMemoryEndpointRegistry>();
+        services.AddSingleton<IEndpointRegistry, AzureTableEndpointRegistry>();
         services.AddSingleton<IEndpointService, EndpointService>();
         services.AddSingleton<IExposureService, ExposureService>();
         services.AddSingleton<IDomainNameBuilder, DefaultDomainNameBuilder>();

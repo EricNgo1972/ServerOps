@@ -1,5 +1,7 @@
 using Azure.Data.Tables;
+using Microsoft.Extensions.Options;
 using ServerOps.Application.Abstractions;
+using ServerOps.Infrastructure.Configuration;
 
 namespace ServerOps.Infrastructure.Registry;
 
@@ -7,9 +9,11 @@ public sealed class AzureTableDomainSuffixRegistry : IDomainSuffixRegistry
 {
     private const string TableName = "Domains";
     private readonly TableClient? _tableClient;
+    private readonly string _fallbackSuffix;
 
-    public AzureTableDomainSuffixRegistry()
+    public AzureTableDomainSuffixRegistry(IOptions<DomainOptions> domainOptions)
     {
+        _fallbackSuffix = domainOptions.Value.DefaultDomainSuffix?.Trim().ToLowerInvariant() ?? string.Empty;
         var connectionString = Environment.GetEnvironmentVariable("STORAGE_CONNECTION_STRING");
         if (string.IsNullOrWhiteSpace(connectionString))
         {
@@ -23,7 +27,7 @@ public sealed class AzureTableDomainSuffixRegistry : IDomainSuffixRegistry
     {
         if (_tableClient is null)
         {
-            return Array.Empty<string>();
+            return GetFallbackSuffixes();
         }
 
         var suffixes = new List<string>();
@@ -45,12 +49,21 @@ public sealed class AzureTableDomainSuffixRegistry : IDomainSuffixRegistry
         }
         catch
         {
-            return Array.Empty<string>();
+            return GetFallbackSuffixes();
         }
 
-        return suffixes
+        var results = suffixes
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.OrdinalIgnoreCase)
             .ToList();
+
+        return results.Count == 0 ? GetFallbackSuffixes() : results;
+    }
+
+    private IReadOnlyList<string> GetFallbackSuffixes()
+    {
+        return string.IsNullOrWhiteSpace(_fallbackSuffix)
+            ? Array.Empty<string>()
+            : [_fallbackSuffix];
     }
 }

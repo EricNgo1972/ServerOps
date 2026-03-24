@@ -6,6 +6,7 @@
 @inject ICompanyAppRegistry CompanyAppRegistry
 @inject IDeploymentHistoryStore DeploymentHistoryStore
 @inject IRollbackService RollbackService
+@inject ServerOps.Web.Services.LiveOperationLogState LiveOperationLogState
 
 <PageTitle>Deployments</PageTitle>
 
@@ -182,7 +183,9 @@
 
         try
         {
-            var result = await RollbackService.RollbackAsync(deployment.AppName, deployment.DeploymentId);
+            var operationId = Guid.NewGuid().ToString("N");
+            LiveOperationLogState.Open(operationId, $"Rollback {deployment.AppName}");
+            var result = await RollbackService.RollbackAsync(deployment.AppName, deployment.DeploymentId, operationId);
             _message = string.IsNullOrWhiteSpace(result.Message)
                 ? "Rollback completed."
                 : result.Message;

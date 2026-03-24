@@ -32,8 +32,9 @@ public sealed class RollbackService : IRollbackService
         _operationLogger = operationLogger;
     }
 
-    public async Task<DeploymentResult> RollbackAsync(string appName, string deploymentId, CancellationToken ct = default)
+    public async Task<DeploymentResult> RollbackAsync(string appName, string deploymentId, string? operationId = null, CancellationToken ct = default)
     {
+        var rollbackOperationId = string.IsNullOrWhiteSpace(operationId) ? Guid.NewGuid().ToString("N") : operationId.Trim();
         var startedAtUtc = DateTimeOffset.UtcNow;
         var history = await _deploymentHistoryStore.GetByAppAsync(appName, ct);
         var target = history.FirstOrDefault(item =>
@@ -44,6 +45,7 @@ public sealed class RollbackService : IRollbackService
             return await AppendRollbackHistoryAsync(new DeploymentResult
             {
                 DeploymentId = Guid.NewGuid().ToString("N"),
+                OperationId = rollbackOperationId,
                 AppName = appName,
                 Version = "unknown",
                 Status = DeploymentStatus.Failed,
@@ -59,6 +61,7 @@ public sealed class RollbackService : IRollbackService
             return await AppendRollbackHistoryAsync(new DeploymentResult
             {
                 DeploymentId = Guid.NewGuid().ToString("N"),
+                OperationId = rollbackOperationId,
                 AppName = appName,
                 Version = target.Version,
                 Status = DeploymentStatus.Failed,
@@ -76,13 +79,14 @@ public sealed class RollbackService : IRollbackService
 
         try
         {
-            await _operationLogger.LogAsync(deploymentId, "Rollback", "Started", ct);
-            var stopResult = await _serviceControlService.StopAsync(appName, ct);
+            await _operationLogger.LogAsync(rollbackOperationId, "Rollback", "Started", ct);
+            var stopResult = await _serviceControlService.StopAsync(appName, rollbackOperationId, ct);
             if (!stopResult.Succeeded)
             {
                 return await AppendRollbackHistoryAsync(new DeploymentResult
                 {
                     DeploymentId = Guid.NewGuid().ToString("N"),
+                    OperationId = rollbackOperationId,
                     AppName = appName,
                     Version = target.Version,
                     Status = DeploymentStatus.Failed,
@@ -100,20 +104,20 @@ public sealed class RollbackService : IRollbackService
             }
 
             _fileSystem.CopyDirectory(target.BackupPath, currentPath, overwrite: true);
-            await _operationLogger.LogAsync(deploymentId, "Rollback", "RestoreBackup", ct);
+            await _operationLogger.LogAsync(rollbackOperationId, "Rollback", "RestoreBackup", ct);
 
-            var startResult = await _serviceControlService.StartAsync(appName, ct);
-            await _operationLogger.LogAsync(deploymentId, "Rollback", "Restart", ct);
+            var startResult = await _serviceControlService.StartAsync(appName, rollbackOperationId, ct);
+            await _operationLogger.LogAsync(rollbackOperationId, "Rollback", "Restart", ct);
             if (!startResult.Succeeded)
             {
-                return await RecoverFailedRollbackAsync(appName, target, deploymentId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);
+                return await RecoverFailedRollbackAsync(appName, target, deploymentId, rollbackOperationId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);
             }
 
             var verified = await VerifyDeploymentWithRetryAsync(appName, ct);
-            await _operationLogger.LogAsync(deploymentId, "Rollback", verified ? "VerifySucceeded" : "VerifyFailed", ct);
+            await _operationLogger.LogAsync(rollbackOperationId, "Rollback", verified ? "VerifySucceeded" : "VerifyFailed", ct);
             if (!verified)
             {
-                return await RecoverFailedRollbackAsync(appName, target, deploymentId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);
+                return await RecoverFailedRollbackAsync(appName, target, deploymentId, rollbackOperationId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);
             }
 
             if (movedCurrent && _fileSystem.DirectoryExists(tempBackupPath))
@@ -124,6 +128,7 @@ public sealed class RollbackService : IRollbackService
             return await AppendRollbackHistoryAsync(new DeploymentResult
             {
                 DeploymentId = Guid.NewGuid().ToString("N"),
+                OperationId = rollbackOperationId,
                 AppName = appName,
                 Version = target.Version,
                 Status = DeploymentStatus.RolledBack,
@@ -135,7 +140,7 @@ public sealed class RollbackService : IRollbackService
         }
         catch
         {
-            return await RecoverFailedRollbackAsync(appName, target, deploymentId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);
+            return await RecoverFailedRollbackAsync(appName, target, deploymentId, rollbackOperationId, startedAtUtc, currentPath, tempBackupPath, movedCurrent, ct);
         }
     }
 
@@ -143,6 +148,7 @@ public sealed class RollbackService : IRollbackService
         string appName,
         DeploymentHistoryItem target,
         string deploymentId,
+        string operationId,
         DateTimeOffset startedAtUtc,
         string currentPath,
         string tempBackupPath,
@@ -159,7 +165,7 @@ public sealed class RollbackService : IRollbackService
             if (movedCurrent && _fileSystem.DirectoryExists(tempBackupPath))
             {
                 _fileSystem.MoveDirectory(tempBackupPath, currentPath);
-                await _serviceControlService.StartAsync(appName, ct);
+                await _serviceControlService.StartAsync(appName, operationId, ct);
             }
         }
         catch
@@ -169,6 +175,7 @@ public sealed class RollbackService : IRollbackService
         return await AppendRollbackHistoryAsync(new DeploymentResult
         {
             DeploymentId = Guid.NewGuid().ToString("N"),
+            OperationId = operationId,
             AppName = appName,
             Version = target.Version,
             Status = DeploymentStatus.Failed,

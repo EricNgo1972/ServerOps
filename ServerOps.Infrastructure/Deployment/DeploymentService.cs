@@ -49,10 +49,10 @@ public sealed class DeploymentService : IDeploymentService
         _operationLogger = operationLogger;
     }
 
-    public async Task<DeploymentResult> DeployAsync(string appName, string assetUrl, int? portOverride = null, CancellationToken cancellationToken = default)
+    public async Task<DeploymentResult> DeployAsync(string appName, string assetUrl, int? portOverride = null, string? operationId = null, CancellationToken cancellationToken = default)
     {
         var startedAtUtc = DateTimeOffset.UtcNow;
-        var deploymentId = Guid.NewGuid().ToString("N");
+        var deploymentId = string.IsNullOrWhiteSpace(operationId) ? Guid.NewGuid().ToString("N") : operationId.Trim();
         var version = ExtractVersion(assetUrl);
 
         if (string.IsNullOrWhiteSpace(appName))
@@ -175,7 +175,7 @@ public sealed class DeploymentService : IDeploymentService
             if (serviceExists)
             {
                 await LogStageAsync(deploymentId, "StopService", $"Requested service={appName}", cancellationToken);
-                var stopResult = await _serviceControlService.StopAsync(appName, cancellationToken);
+                var stopResult = await _serviceControlService.StopAsync(appName, deploymentId, cancellationToken);
                 await LogStageAsync(deploymentId, "StopService", DescribeCommandResult(stopResult), cancellationToken);
                 if (!stopResult.Succeeded)
                 {
@@ -319,7 +319,7 @@ public sealed class DeploymentService : IDeploymentService
             }
 
             await LogStageAsync(deploymentId, "StartService", $"Requested service={appName}", cancellationToken);
-            var startResult = await _serviceControlService.StartAsync(appName, cancellationToken);
+            var startResult = await _serviceControlService.StartAsync(appName, deploymentId, cancellationToken);
             await LogStageAsync(deploymentId, "StartService", DescribeCommandResult(startResult), cancellationToken);
             if (!startResult.Succeeded)
             {
@@ -443,7 +443,7 @@ public sealed class DeploymentService : IDeploymentService
         {
             await LogStageAsync(deploymentId, "Rollback", $"Started reason={message}", cancellationToken);
             await LogStageAsync(deploymentId, "Rollback", $"Stopping service={appName}", cancellationToken);
-            var stopResult = await _serviceControlService.StopAsync(appName, cancellationToken);
+            var stopResult = await _serviceControlService.StopAsync(appName, deploymentId, cancellationToken);
             await LogStageAsync(deploymentId, "Rollback", $"Stop result {DescribeCommandResult(stopResult)}", cancellationToken);
             if (!stopResult.Succeeded)
             {
@@ -469,7 +469,7 @@ public sealed class DeploymentService : IDeploymentService
             await LogStageAsync(deploymentId, "Rollback", "RestoreBackup completed", cancellationToken);
 
             await LogStageAsync(deploymentId, "Rollback", $"Restarting service={appName}", cancellationToken);
-            var restartResult = await _serviceControlService.StartAsync(appName, cancellationToken);
+            var restartResult = await _serviceControlService.StartAsync(appName, deploymentId, cancellationToken);
             await LogStageAsync(deploymentId, "Rollback", $"Restart result {DescribeCommandResult(restartResult)}", cancellationToken);
             if (!restartResult.Succeeded)
             {
@@ -582,6 +582,7 @@ public sealed class DeploymentService : IDeploymentService
         return new DeploymentResult
         {
             DeploymentId = deploymentId,
+            OperationId = deploymentId,
             AppName = appName,
             Version = version,
             Status = status,

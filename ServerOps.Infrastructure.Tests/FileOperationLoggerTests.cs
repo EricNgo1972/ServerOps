@@ -11,7 +11,7 @@ public sealed class FileOperationLoggerTests
     public async Task LogAsync_Writes_File()
     {
         var fileSystem = new FakeFileSystem();
-        var logger = new FileOperationLogger(fileSystem, new FakeRuntimeEnvironment());
+        var logger = new FileOperationLogger(fileSystem, new FakeRuntimeEnvironment(), new FakeOperationLogStream());
 
         await logger.LogAsync("op-1", "Download", "Started");
 
@@ -24,7 +24,7 @@ public sealed class FileOperationLoggerTests
     public async Task LogAsync_Appends_Multiple_Lines()
     {
         var fileSystem = new FakeFileSystem();
-        var logger = new FileOperationLogger(fileSystem, new FakeRuntimeEnvironment());
+        var logger = new FileOperationLogger(fileSystem, new FakeRuntimeEnvironment(), new FakeOperationLogStream());
 
         await logger.LogAsync("op-1", "Download", "Started");
         await logger.LogAsync("op-1", "Extract", "Completed");
@@ -91,5 +91,11 @@ public sealed class FileOperationLoggerTests
                 _directories.Add(current);
             }
         }
+    }
+
+    private sealed class FakeOperationLogStream : IOperationLogStream
+    {
+        public Task PublishAsync(ServerOps.Application.DTOs.OperationLogEvent logEvent, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 }

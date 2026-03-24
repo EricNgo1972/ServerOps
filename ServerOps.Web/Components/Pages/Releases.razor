@@ -8,10 +8,11 @@
 @inject IGitHubService GitHubService
 @inject IOneClickDeployService OneClickDeployService
 @inject IDomainNameBuilder DomainNameBuilder
+@inject ServerOps.Web.Services.LiveOperationLogState LiveOperationLogState
 
 <PageTitle>Releases</PageTitle>
 
-<div class="releases-shell">
+<div class="page-container">
     <header class="page-header">
         <div>
             <h1>Releases</h1>
@@ -39,6 +40,7 @@
         </div>
     }
 
+ 
     <section class="releases-toolbar">
         <label class="field">
             <span>Application</span>
@@ -350,8 +352,11 @@
 
         try
         {
+            var operationId = Guid.NewGuid().ToString("N");
+            LiveOperationLogState.Open(operationId, $"Deploy {_selectedApp.Name}");
             _deployResult = await OneClickDeployService.DeployAsync(new OneClickDeployRequest
             {
+                OperationId = operationId,
                 Repo = repo,
                 AppName = _selectedApp.Name,
                 AssetUrl = _selectedAsset.DownloadUrl,

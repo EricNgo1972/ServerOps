@@ -2,6 +2,7 @@ namespace ServerOps.Application.DTOs;
 
 public sealed class OneClickDeployRequest
 {
+    public string OperationId { get; set; } = string.Empty;
     public string Repo { get; set; } = string.Empty;
     public string AppName { get; set; } = string.Empty;
     public string AssetUrl { get; set; } = string.Empty;

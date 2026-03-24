@@ -1,8 +1,10 @@
 using System.Text;
+using Microsoft.Extensions.Options;
 using ServerOps.Application.Abstractions;
 using ServerOps.Application.DTOs;
 using ServerOps.Domain.Entities;
 using ServerOps.Infrastructure.CloudflareTunnel;
+using ServerOps.Infrastructure.Configuration;
 using Xunit;
 
 namespace ServerOps.Infrastructure.Tests;
@@ -24,7 +26,10 @@ ingress:
         var service = new CloudflaredConfigService(
             new FakeCloudflaredService(new TunnelInfo { ConfigPath = "/etc/cloudflared/config.yml" }),
             fileSystem,
-            new FakeCommandRunner());
+            new FakeCommandRunner(),
+            new FakeEndpointService(),
+            new FakeHttpClientFactory(),
+            Options.Create(new CloudflareOptions()));
 
         await service.AddIngressAsync("phoebus.local", 5000);
 
@@ -56,7 +61,10 @@ ingress:
         var service = new CloudflaredConfigService(
             new FakeCloudflaredService(new TunnelInfo { ConfigPath = "/etc/cloudflared/config.yml" }),
             fileSystem,
-            new FakeCommandRunner());
+            new FakeCommandRunner(),
+            new FakeEndpointService(),
+            new FakeHttpClientFactory(),
+            Options.Create(new CloudflareOptions()));
 
         await service.RemoveIngressAsync("phoebus.local");
 
@@ -78,8 +86,17 @@ ingress:
         public Task<bool> IsInstalledAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
         public Task<bool> IsRunningAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
         public Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo);
-        public Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
-        public Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+        public Task<CommandResult> InstallAsync(string? operationId = null, CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+        public Task<CommandResult> CreateTunnelAsync(string? operationId = null, CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+        public Task<CommandResult> StartAsync(string? operationId = null, CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+        public Task<CommandResult> RestartAsync(string? operationId = null, CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+        public Task<CommandResult> DeleteTunnelAsync(string? operationId = null, CancellationToken cancellationToken = default) => Task.FromResult(new CommandResult());
+    }
+
+    private sealed class FakeEndpointService : IEndpointService
+    {
+        public Task<IReadOnlyList<ServiceEndpoint>> GetEndpointsAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<ServiceEndpoint>>(Array.Empty<ServiceEndpoint>());
     }
 
     private sealed class FakeFileSystem : IFileSystem
@@ -114,5 +131,10 @@ ingress:
     {
         public Task<CommandResult> RunAsync(CommandRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(new CommandResult { ExitCode = 0 });
+    }
+
+    private sealed class FakeHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name = "") => new();
     }
 }

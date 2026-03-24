@@ -1,4 +1,16 @@
 @page "/settings"
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using System.Text.Json
+@using System.Text.Json.Nodes
+@using Microsoft.JSInterop
+@using ServerOps.Domain.Enums
+@rendermode InteractiveServer
+@inject IConfiguration Configuration
+@inject IWebHostEnvironment HostEnvironment
+@inject IRuntimeEnvironment RuntimeEnvironment
+@inject IHostService HostService
+@inject ICommandRunner CommandRunner
+@inject IJSRuntime JS
 
 <PageTitle>Settings</PageTitle>
 
@@ -10,8 +22,392 @@
         </div>
     </div>
 
-    <section class="card">
-        <h2>Coming next</h2>
-        <p class="page-description">Platform configuration views will be added in the next phase.</p>
-    </section>
+    @if (!string.IsNullOrWhiteSpace(_successMessage))
+    {
+        <div class="message-area success">
+            @_successMessage
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_errorMessage))
+    {
+        <div class="message-area error">
+            @_errorMessage
+        </div>
+    }
+
+    @if (_isLoading)
+    {
+        <section class="card">
+            <ActivityIndicator Title="Loading settings" Message="Fetching environment paths, defaults, and system setup status." />
+        </section>
+    }
+    else
+    {
+        <section class="card">
+            <div class="page-header">
+                <div>
+                    <h2>Environment</h2>
+                    <p class="page-description">Runtime paths used by ServerOps.</p>
+                </div>
+            </div>
+
+            <div class="status-list">
+                <div>
+                    <dt>Apps root path</dt>
+                    <dd>@_appsRootPath</dd>
+                </div>
+                <div>
+                    <dt>Cloudflared config path</dt>
+                    <dd>@_cloudflaredConfigPath</dd>
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="page-header">
+                <div>
+                    <h2>Domain</h2>
+                    <p class="page-description">Used to generate application URLs.</p>
+                </div>
+            </div>
+
+            <div class="field">
+                <span>Base domain</span>
+                <input value="@_baseDomain"
+                       disabled="@_isSaving || !string.IsNullOrWhiteSpace(_processingComponent)"
+                       @oninput="OnBaseDomainChanged" />
+            </div>
+
+            <p class="page-description">Example: @GetDomainExample()</p>
+
+            <div class="button-row">
+                <button type="button"
+                        class="btn btn-primary"
+                        disabled="@_isSaving || !string.IsNullOrWhiteSpace(_processingComponent)"
+                        @onclick="SaveAsync">
+                    @(_isSaving ? "Saving..." : "Save")
+                </button>
+            </div>
+        </section>
+
+        <section class="card">
+            <div class="page-header">
+                <div>
+                    <h2>System Setup</h2>
+                    <p class="page-description">Install required host components.</p>
+                </div>
+            </div>
+
+            <div class="settings-setup-list">
+                @foreach (var component in _components)
+                {
+                    var status = _componentStatuses.TryGetValue(component.Key, out var existingStatus)
+                        ? existingStatus
+                        : SetupStatus.NotInstalled;
+                    var isProcessing = string.Equals(_processingComponent, component.Key, StringComparison.Ordinal);
+
+                    <div class="settings-setup-row">
+                        <div class="settings-setup-name">@component.DisplayName</div>
+                        <div>
+                            <span class="app-badge @GetSetupBadgeClass(status, isProcessing)">
+                                @GetSetupLabel(status, isProcessing)
+                            </span>
+                        </div>
+                        <div class="action-group">
+                            @if (status != SetupStatus.Installed)
+                            {
+                                <button type="button"
+                                        class="btn btn-secondary"
+                                        disabled="@(!string.IsNullOrWhiteSpace(_processingComponent))"
+                                        @onclick="() => InstallComponentAsync(component)">
+                                    Install
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </section>
+    }
 </div>
+
+@code {
+    private readonly IReadOnlyList<SetupComponent> _components =
+    [
+        new("cloudflared", "Cloudflared"),
+        new("ssh", "SSH"),
+        new("postgresql", "PostgreSQL")
+    ];
+
+    private readonly Dictionary<string, SetupStatus> _componentStatuses = new(StringComparer.OrdinalIgnoreCase);
+    private string _appsRootPath = string.Empty;
+    private string _cloudflaredConfigPath = string.Empty;
+    private string _baseDomain = string.Empty;
+    private bool _isLoading = true;
+    private bool _isSaving;
+    private string _processingComponent = string.Empty;
+    private string _successMessage = string.Empty;
+    private string _errorMessage = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _appsRootPath = RuntimeEnvironment.GetAppsRootPath();
+        _cloudflaredConfigPath = RuntimeEnvironment.GetCloudflaredConfigPath();
+        _baseDomain = (Configuration["Domain:DefaultDomainSuffix"] ?? string.Empty).Trim();
+        await LoadComponentStatusesAsync();
+        _isLoading = false;
+    }
+
+    private async Task LoadComponentStatusesAsync()
+    {
+        _componentStatuses.Clear();
+        var services = await HostService.GetServicesAsync();
+
+        foreach (var component in _components)
+        {
+            _componentStatuses[component.Key] = component.Key switch
+            {
+                "cloudflared" => await IsCloudflaredInstalledAsync(),
+                "ssh" => IsServiceInstalled(services, "sshd", "ssh") ? SetupStatus.Installed : SetupStatus.NotInstalled,
+                "postgresql" => IsServiceInstalled(services, "postgresql", "postgres") ? SetupStatus.Installed : SetupStatus.NotInstalled,
+                _ => SetupStatus.NotInstalled
+            };
+        }
+    }
+
+    private async Task<SetupStatus> IsCloudflaredInstalledAsync()
+    {
+        var result = await CommandRunner.RunAsync(new CommandRequest
+        {
+            Command = RuntimeEnvironment.GetCurrentOs() == OsType.Windows
+                ? @"C:\Cloudflared\bin\cloudflared.exe"
+                : "cloudflared",
+            Arguments = ["--version"]
+        });
+
+        return result.Succeeded ? SetupStatus.Installed : SetupStatus.NotInstalled;
+    }
+
+    private static bool IsServiceInstalled(IReadOnlyList<ServerOps.Domain.Entities.ServiceInfo> services, params string[] aliases)
+    {
+        return services.Any(service =>
+            aliases.Any(alias =>
+                string.Equals(service.Name, alias, StringComparison.OrdinalIgnoreCase) ||
+                service.Name.StartsWith(alias + "-", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private void OnBaseDomainChanged(ChangeEventArgs args)
+    {
+        _baseDomain = args.Value?.ToString()?.Trim() ?? string.Empty;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_isSaving)
+        {
+            return;
+        }
+
+        _isSaving = true;
+        _successMessage = string.Empty;
+        _errorMessage = string.Empty;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var appSettingsPath = Path.Combine(HostEnvironment.ContentRootPath, "appsettings.json");
+            if (!File.Exists(appSettingsPath))
+            {
+                throw new InvalidOperationException("appsettings.json was not found.");
+            }
+
+            var content = await File.ReadAllTextAsync(appSettingsPath);
+            var rootNode = string.IsNullOrWhiteSpace(content)
+                ? new JsonObject()
+                : JsonNode.Parse(content) as JsonObject ?? new JsonObject();
+
+            var domainSection = rootNode["Domain"] as JsonObject ?? new JsonObject();
+            domainSection["DefaultDomainSuffix"] = _baseDomain;
+            rootNode["Domain"] = domainSection;
+
+            var updatedContent = rootNode.ToJsonString(new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+
+            await File.WriteAllTextAsync(appSettingsPath, updatedContent);
+            _successMessage = "Base domain saved successfully.";
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to save the base domain."
+                : ex.Message;
+        }
+        finally
+        {
+            _isSaving = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task InstallComponentAsync(SetupComponent component)
+    {
+        if (!string.IsNullOrWhiteSpace(_processingComponent))
+        {
+            return;
+        }
+
+        var confirmed = await JS.InvokeAsync<bool>("confirm", $"Install {component.DisplayName}?");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        _processingComponent = component.Key;
+        _componentStatuses[component.Key] = SetupStatus.Installing;
+        _successMessage = string.Empty;
+        _errorMessage = string.Empty;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var result = await RunInstallAsync(component.Key);
+            if (!result.Succeeded)
+            {
+                var details = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+                throw new InvalidOperationException(string.IsNullOrWhiteSpace(details)
+                    ? $"Unable to install {component.DisplayName}."
+                    : details.Trim());
+            }
+
+            await LoadComponentStatusesAsync();
+            _successMessage = $"{component.DisplayName} installation completed.";
+        }
+        catch (Exception ex)
+        {
+            _componentStatuses[component.Key] = SetupStatus.NotInstalled;
+            _errorMessage = string.IsNullOrWhiteSpace(ex.Message)
+                ? $"Unable to install {component.DisplayName}."
+                : ex.Message;
+        }
+        finally
+        {
+            _processingComponent = string.Empty;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private Task<CommandResult> RunInstallAsync(string componentKey)
+    {
+        return RuntimeEnvironment.GetCurrentOs() switch
+        {
+            OsType.Windows => RunWindowsInstallAsync(componentKey),
+            OsType.Linux => RunLinuxInstallAsync(componentKey),
+            _ => Task.FromResult(new CommandResult { ExitCode = -1, StdErr = "Unsupported operating system." })
+        };
+    }
+
+    private Task<CommandResult> RunWindowsInstallAsync(string componentKey)
+    {
+        return componentKey switch
+        {
+            "cloudflared" => CommandRunner.RunAsync(new CommandRequest
+            {
+                Command = "winget",
+                Arguments =
+                [
+                    "install",
+                    "--id", "Cloudflare.cloudflared",
+                    "--exact",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements"
+                ]
+            }),
+            "ssh" => CommandRunner.RunAsync(new CommandRequest
+            {
+                Command = "powershell",
+                Arguments =
+                [
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"
+                ]
+            }),
+            "postgresql" => CommandRunner.RunAsync(new CommandRequest
+            {
+                Command = "winget",
+                Arguments =
+                [
+                    "install",
+                    "--id", "PostgreSQL.PostgreSQL",
+                    "--exact",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements"
+                ]
+            }),
+            _ => Task.FromResult(new CommandResult { ExitCode = -1, StdErr = "Unknown component." })
+        };
+    }
+
+    private Task<CommandResult> RunLinuxInstallAsync(string componentKey)
+    {
+        return componentKey switch
+        {
+            "cloudflared" => CommandRunner.RunAsync(new CommandRequest
+            {
+                Command = "apt-get",
+                Arguments = ["install", "-y", "cloudflared"]
+            }),
+            "ssh" => CommandRunner.RunAsync(new CommandRequest
+            {
+                Command = "apt-get",
+                Arguments = ["install", "-y", "openssh-server"]
+            }),
+            "postgresql" => CommandRunner.RunAsync(new CommandRequest
+            {
+                Command = "apt-get",
+                Arguments = ["install", "-y", "postgresql"]
+            }),
+            _ => Task.FromResult(new CommandResult { ExitCode = -1, StdErr = "Unknown component." })
+        };
+    }
+
+    private string GetDomainExample()
+    {
+        return string.IsNullOrWhiteSpace(_baseDomain)
+            ? "app.example.com"
+            : $"app.{_baseDomain}";
+    }
+
+    private static string GetSetupLabel(SetupStatus status, bool isProcessing)
+    {
+        return isProcessing || status == SetupStatus.Installing
+            ? "Installing"
+            : status == SetupStatus.Installed
+                ? "Installed"
+                : "Not Installed";
+    }
+
+    private static string GetSetupBadgeClass(SetupStatus status, bool isProcessing)
+    {
+        return isProcessing || status == SetupStatus.Installing
+            ? "unknown"
+            : status == SetupStatus.Installed
+                ? "running"
+                : "stopped";
+    }
+
+    private enum SetupStatus
+    {
+        NotInstalled,
+        Installed,
+        Installing
+    }
+
+    private sealed record SetupComponent(string Key, string DisplayName);
+}

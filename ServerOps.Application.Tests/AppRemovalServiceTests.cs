@@ -94,10 +94,10 @@ public sealed class AppRemovalServiceTests
     {
         public string LastServiceName { get; private set; } = string.Empty;
 
-        public Task ExposeAsync(string serviceName, string hostname, CancellationToken ct = default) => Task.CompletedTask;
-        public Task UpdateAsync(string serviceName, string newHostname, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ExposeAsync(string serviceName, string hostname, string? operationId = null, CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpdateAsync(string serviceName, string newHostname, string? operationId = null, CancellationToken ct = default) => Task.CompletedTask;
 
-        public Task UnexposeAsync(string serviceName, CancellationToken ct = default)
+        public Task UnexposeAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
         {
             LastServiceName = serviceName;
             return Task.CompletedTask;
@@ -116,17 +116,17 @@ public sealed class AppRemovalServiceTests
         public int StopCalls { get; private set; }
         public string LastStoppedServiceName { get; private set; } = string.Empty;
 
-        public Task<CommandResult> StartAsync(string serviceName, CancellationToken ct = default)
+        public Task<CommandResult> StartAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
             => Task.FromResult(new CommandResult { ExitCode = 0 });
 
-        public Task<CommandResult> StopAsync(string serviceName, CancellationToken ct = default)
+        public Task<CommandResult> StopAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
         {
             StopCalls++;
             LastStoppedServiceName = serviceName;
             return Task.FromResult(_stopResult);
         }
 
-        public Task<CommandResult> RestartAsync(string serviceName, CancellationToken ct = default)
+        public Task<CommandResult> RestartAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
             => Task.FromResult(new CommandResult { ExitCode = 0 });
     }
 

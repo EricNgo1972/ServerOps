@@ -2,6 +2,7 @@ namespace ServerOps.Application.DTOs;
 
 public sealed class OneClickDeployResult
 {
+    public string OperationId { get; init; } = string.Empty;
     public DeploymentResult Deployment { get; init; } = new();
     public string? Hostname { get; init; }
     public string? PublicUrl { get; init; }

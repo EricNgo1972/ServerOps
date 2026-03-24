@@ -88,7 +88,7 @@ a {
 
 .page-container {
     width: 100%;
-    max-width: 1000px;
+    max-width: 1536px;
     margin: 0 auto;
     display: grid;
     gap: var(--space-5);
@@ -169,13 +169,6 @@ h2 {
     flex-wrap: wrap;
 }
 
-/* Dashboard */
-.dashboard-shell {
-    max-width: 960px;
-    margin: 0 auto;
-    display: grid;
-    gap: 1.25rem;
-}
 
 .dashboard-header h1 {
     margin: 0;
@@ -356,8 +349,6 @@ h2 {
 
 /* Releases */
 .releases-shell {
-    max-width: 1120px;
-    margin: 0 auto;
     display: grid;
     gap: 1.25rem;
 }
@@ -641,6 +632,17 @@ h2 {
     font-weight: 600;
 }
 
+.app-local-link {
+    color: #93c5fd;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.app-local-link:hover {
+    color: #bfdbfe;
+    text-decoration: underline;
+}
+
 .app-badge {
     display: inline-flex;
     align-items: center;
@@ -740,6 +742,7 @@ h2 {
 .inline-confirm {
     display: inline-flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.6rem;
     padding-left: 0.35rem;
 }
@@ -747,6 +750,17 @@ h2 {
 .inline-confirm-text {
     color: var(--muted);
     font-size: 0.88rem;
+}
+
+.inline-confirm-warning {
+    padding: 0.7rem 0.85rem;
+    border: 1px solid rgba(248, 113, 113, 0.24);
+    border-radius: 12px;
+    background: rgba(248, 113, 113, 0.08);
+}
+
+.inline-confirm-warning .inline-confirm-text {
+    color: #fecaca;
 }
 
 /* Deployments */
@@ -870,6 +884,10 @@ h2 {
 /* Logs */
 .logs-shell {
     padding: 1.25rem;
+}
+
+.logs-page {
+    max-width: 100%;
 }
 
 .logs-layout {
@@ -1001,6 +1019,259 @@ h2 {
     color: #94a3b8;
 }
 
+.logs-file-list {
+    display: grid;
+    gap: 0;
+}
+
+.logs-file-item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 0.2rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.1);
+    border-left: 0;
+    border-right: 0;
+    border-bottom: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 0.18s ease;
+}
+
+.logs-file-item:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.logs-file-list .logs-file-item:first-child {
+    border-top: 0;
+    padding-top: 0.1rem;
+}
+
+.logs-file-main {
+    min-width: 0;
+    display: grid;
+    gap: 0.3rem;
+}
+
+.logs-file-name {
+    font-weight: 700;
+    word-break: break-all;
+}
+
+.logs-file-meta {
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+
+.settings-setup-list {
+    display: grid;
+    gap: 0;
+}
+
+.settings-setup-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) minmax(140px, 180px) auto;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 0.2rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.settings-setup-list .settings-setup-row:first-child {
+    border-top: 0;
+    padding-top: 0.1rem;
+}
+
+.settings-setup-name {
+    font-weight: 700;
+}
+
+/* Exposure */
+.exposure-shell {
+    padding: 1.25rem;
+    display: grid;
+    gap: 1rem;
+}
+
+.exposure-tunnel {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.exposure-tunnel-panel {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+    padding-bottom: 1rem;
+}
+
+.exposure-tunnel-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.exposure-tunnel-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+.exposure-tunnel-item {
+    display: grid;
+    gap: 0.35rem;
+    min-width: 108px;
+}
+
+.exposure-tunnel-id {
+    margin-top: 0.9rem;
+    color: var(--muted);
+    font-size: 0.88rem;
+    word-break: break-all;
+}
+
+.exposure-list {
+    display: grid;
+    gap: 0;
+}
+
+.exposure-grid {
+    display: grid;
+    grid-template-columns: minmax(180px, 1.2fr) minmax(72px, 0.45fr) minmax(240px, 1.5fr) minmax(120px, 0.8fr) minmax(170px, 1fr);
+    gap: 1rem;
+    align-items: center;
+}
+
+.exposure-grid-header {
+    padding: 0 0.2rem 0.85rem;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.exposure-row {
+    padding: 1rem 0.2rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.exposure-app-name {
+    font-weight: 700;
+}
+
+.exposure-app-meta {
+    margin-top: 0.3rem;
+    color: var(--muted);
+    font-size: 0.88rem;
+}
+
+.exposure-port {
+    font-weight: 600;
+}
+
+.exposure-domain-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    color: var(--text);
+    padding: 0.72rem 0.9rem;
+    font: inherit;
+}
+
+.exposure-domain-input:disabled {
+    opacity: 0.6;
+}
+
+.exposure-domain-composer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 220px);
+    gap: 0.75rem;
+}
+
+.exposure-domain-select {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 12px;
+    color: var(--text);
+    padding: 0.72rem 0.9rem;
+    font: inherit;
+}
+
+.exposure-domain-select:disabled {
+    opacity: 0.6;
+}
+
+.exposure-domain-preview {
+    margin-top: 0.45rem;
+    color: var(--muted);
+    font-size: 0.86rem;
+    word-break: break-all;
+}
+
+.logs-viewer-full {
+    width: 100%;
+}
+
+.live-log-drawer {
+    position: fixed;
+    left: 280px;
+    right: 1.5rem;
+    bottom: 1.5rem;
+    z-index: 50;
+    background: rgba(12, 18, 30, 0.98);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    border-radius: 18px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+}
+
+.live-log-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.live-log-header h2 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.live-log-body {
+    padding: 1rem 1.25rem 1.25rem;
+}
+
+.live-log-viewer {
+    width: 100%;
+    max-height: 320px;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.55;
+}
+
+.live-log-status {
+    align-self: center;
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+
+.live-log-status.error {
+    color: #fca5a5;
+}
+
 @media (max-width: 900px) {
     .app-shell {
         grid-template-columns: 1fr;
@@ -1013,6 +1284,12 @@ h2 {
 
     .releases-layout {
         grid-template-columns: 1fr;
+    }
+
+    .live-log-drawer {
+        left: 1rem;
+        right: 1rem;
+        bottom: 1rem;
     }
 }
 
@@ -1058,6 +1335,19 @@ h2 {
         border-bottom: 1px solid rgba(148, 163, 184, 0.12);
         padding-right: 0;
         padding-bottom: 1rem;
+    }
+
+    .exposure-grid {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0.6rem;
+    }
+
+    .exposure-grid-header {
+        display: none;
+    }
+
+    .exposure-domain-composer {
+        grid-template-columns: 1fr;
     }
 }
 

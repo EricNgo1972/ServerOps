@@ -428,19 +428,19 @@ public sealed class DeploymentServiceTests
         public int StartCalls { get; private set; }
         public int StopCalls { get; private set; }
 
-        public Task<CommandResult> StartAsync(string serviceName, CancellationToken ct = default)
+        public Task<CommandResult> StartAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
         {
             StartCalls++;
             return Task.FromResult(_startResults.Count > 0 ? _startResults.Dequeue() : new CommandResult { ExitCode = 0 });
         }
 
-        public Task<CommandResult> StopAsync(string serviceName, CancellationToken ct = default)
+        public Task<CommandResult> StopAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
         {
             StopCalls++;
             return Task.FromResult(_stopResult);
         }
 
-        public Task<CommandResult> RestartAsync(string serviceName, CancellationToken ct = default)
+        public Task<CommandResult> RestartAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
             => Task.FromResult(new CommandResult { ExitCode = 0 });
     }
 

@@ -164,7 +164,7 @@ public sealed class OneClickDeployServiceTests
 
         public int? PortOverride { get; private set; }
 
-        public Task<DeploymentResult> DeployAsync(string appName, string assetUrl, int? portOverride = null, CancellationToken cancellationToken = default)
+        public Task<DeploymentResult> DeployAsync(string appName, string assetUrl, int? portOverride = null, string? operationId = null, CancellationToken cancellationToken = default)
         {
             PortOverride = portOverride;
             return Task.FromResult(_result);
@@ -183,7 +183,7 @@ public sealed class OneClickDeployServiceTests
         public int Calls { get; private set; }
         public string Hostname { get; private set; } = string.Empty;
 
-        public Task ExposeAsync(string serviceName, string hostname, CancellationToken ct = default)
+        public Task ExposeAsync(string serviceName, string hostname, string? operationId = null, CancellationToken ct = default)
         {
             Calls++;
             Hostname = hostname;
@@ -196,10 +196,10 @@ public sealed class OneClickDeployServiceTests
             return Task.CompletedTask;
         }
 
-        public Task UpdateAsync(string serviceName, string newHostname, CancellationToken ct = default)
+        public Task UpdateAsync(string serviceName, string newHostname, string? operationId = null, CancellationToken ct = default)
             => Task.CompletedTask;
 
-        public Task UnexposeAsync(string serviceName, CancellationToken ct = default)
+        public Task UnexposeAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
             => Task.CompletedTask;
     }
 

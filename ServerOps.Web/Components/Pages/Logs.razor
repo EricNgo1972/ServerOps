@@ -1,18 +1,17 @@
 @page "/logs"
 @using static Microsoft.AspNetCore.Components.Web.RenderMode
-@using ServerOps.Application.Models
+@using Microsoft.JSInterop
 @rendermode InteractiveServer
-@inject ICompanyAppRegistry CompanyAppRegistry
-@inject IDeploymentHistoryStore DeploymentHistoryStore
-@inject ILogService LogService
+@inject IJSRuntime JS
+@inject IRuntimeEnvironment RuntimeEnvironment
 
 <PageTitle>Logs</PageTitle>
 
-<div class="page-container">
+<div class="page-container logs-page">
     <div class="page-header">
         <div>
             <h1>Logs</h1>
-            <p class="page-description">Browse and inspect operation logs.</p>
+            <p class="page-description">Browse and download operation log files.</p>
         </div>
     </div>
 
@@ -26,143 +25,74 @@
     <section class="card logs-shell">
         @if (_isLoading)
         {
-            <ActivityIndicator Title="Loading operations" Message="Fetching deployment operations with available logs." />
+            <ActivityIndicator Title="Loading log files" Message="Reading the log folder." />
+        }
+        else if (_logFiles.Count == 0)
+        {
+            <p class="page-description">No log files found.</p>
         }
         else
         {
-            <div class="logs-layout">
-                <aside class="logs-sidebar">
-                    <div class="logs-sidebar-header">
-                        <h2>Operations</h2>
-                        <span class="logs-count">@_operations.Count</span>
-                    </div>
-
-                    @if (_operations.Count == 0)
-                    {
-                        <p class="page-description">No operation logs found.</p>
-                    }
-                    else
-                    {
-                        <div class="logs-operation-list">
-                            @foreach (var operation in _operations)
-                            {
-                                var isSelected = string.Equals(_selectedOperationId, operation.OperationId, StringComparison.Ordinal);
-
-                                <button type="button"
-                                        class="logs-operation-item @(isSelected ? "selected" : string.Empty)"
-                                        @onclick="() => SelectOperationAsync(operation)">
-                                    <div class="logs-operation-top">
-                                        <span class="logs-app-name">@operation.AppDisplayName</span>
-                                        <span class="deployment-badge @GetStatusCssClass(operation.Status)">@operation.Status</span>
-                                    </div>
-                                    <div class="logs-operation-id">@operation.OperationId</div>
-                                    <div class="logs-operation-time">@FormatTime(operation.StartedAtUtc)</div>
-                                </button>
-                            }
+            <div class="logs-file-list">
+                @foreach (var logFile in _logFiles)
+                {
+                    <button type="button"
+                            class="logs-file-item"
+                            @onclick="() => DownloadAsync(logFile)">
+                        <div class="logs-file-main">
+                            <div class="logs-file-name">@logFile.Name</div>
+                            <div class="logs-file-meta">@FormatTimestamp(logFile.LastModifiedUtc)</div>
                         </div>
-                    }
-                </aside>
-
-                <div class="logs-viewer-panel">
-                    @if (_isLoadingLogs)
-                    {
-                        <ActivityIndicator Title="Loading logs" Message="Fetching log lines for the selected operation." />
-                    }
-                    else if (string.IsNullOrWhiteSpace(_selectedOperationId))
-                    {
-                        <p class="page-description">Select an operation to view logs.</p>
-                    }
-                    else if (_logLines.Count == 0)
-                    {
-                        <p class="page-description">No log lines found for this operation.</p>
-                    }
-                    else
-                    {
-                        <div class="logs-viewer-header">
-                            <div>
-                                <h2>Log Output</h2>
-                                <p class="page-description">Operation: @_selectedOperationId</p>
-                            </div>
-                        </div>
-
-                        <div class="logs-viewer">
-                            @foreach (var line in _logLines)
-                            {
-                                <div class="log-line @GetLogLevelCssClass(line)">@line</div>
-                            }
-                        </div>
-                    }
-                </div>
+                        <span class="btn btn-secondary">Download</span>
+                    </button>
+                }
             </div>
         }
     </section>
 </div>
 
 @code {
-    private IReadOnlyList<OperationListItem> _operations = Array.Empty<OperationListItem>();
-    private IReadOnlyList<string> _logLines = Array.Empty<string>();
+    private readonly List<LogFileItem> _logFiles = new();
     private bool _isLoading = true;
-    private bool _isLoadingLogs;
-    private string _selectedOperationId = string.Empty;
     private string _errorMessage = string.Empty;
+    private string _logDirectory = string.Empty;
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync()
     {
-        await LoadOperationsAsync();
+        LoadLogFiles();
+        return Task.CompletedTask;
     }
 
-    private async Task LoadOperationsAsync()
+    private void LoadLogFiles()
     {
         _isLoading = true;
         _errorMessage = string.Empty;
+        _logFiles.Clear();
 
         try
         {
-            var apps = await CompanyAppRegistry.GetAppsAsync();
-            var appNameLookup = apps.ToDictionary(
-                app => app.Name,
-                app => string.IsNullOrWhiteSpace(app.DisplayName) ? app.Name : app.DisplayName!,
-                StringComparer.OrdinalIgnoreCase);
-
-            var historyTasks = apps.Select(app => DeploymentHistoryStore.GetByAppAsync(app.Name)).ToArray();
-            var historyByApp = await Task.WhenAll(historyTasks);
-
-            var operations = new List<OperationListItem>();
-            foreach (var historyItems in historyByApp)
+            _logDirectory = Path.Combine(RuntimeEnvironment.GetAppsRootPath(), "_logs");
+            if (!Directory.Exists(_logDirectory))
             {
-                foreach (var item in historyItems)
+                return;
+            }
+
+            foreach (var path in Directory.GetFiles(_logDirectory, "*.log", SearchOption.TopDirectoryOnly))
+            {
+                var fileInfo = new FileInfo(path);
+                _logFiles.Add(new LogFileItem
                 {
-                    if (!await LogService.ExistsAsync(item.DeploymentId))
-                    {
-                        continue;
-                    }
-
-                    operations.Add(new OperationListItem
-                    {
-                        OperationId = item.DeploymentId,
-                        AppName = item.AppName,
-                        AppDisplayName = appNameLookup.TryGetValue(item.AppName, out var displayName) ? displayName : item.AppName,
-                        Status = item.Status,
-                        StartedAtUtc = item.StartedAtUtc
-                    });
-                }
+                    Name = fileInfo.Name,
+                    LastModifiedUtc = fileInfo.LastWriteTimeUtc
+                });
             }
 
-            _operations = operations
-                .OrderByDescending(item => item.StartedAtUtc)
-                .ToList();
-
-            if (_operations.Count > 0)
-            {
-                await SelectOperationAsync(_operations[0]);
-            }
+            _logFiles.Sort((left, right) => right.LastModifiedUtc.CompareTo(left.LastModifiedUtc));
         }
         catch (Exception ex)
         {
-            _operations = Array.Empty<OperationListItem>();
-            _logLines = Array.Empty<string>();
             _errorMessage = string.IsNullOrWhiteSpace(ex.Message)
-                ? "Unable to load operations."
+                ? "Unable to load log files."
                 : ex.Message;
         }
         finally
@@ -171,71 +101,36 @@
         }
     }
 
-    private async Task SelectOperationAsync(OperationListItem operation)
+    private async Task DownloadAsync(LogFileItem logFile)
     {
-        if (string.IsNullOrWhiteSpace(operation.OperationId))
-        {
-            return;
-        }
-
-        _selectedOperationId = operation.OperationId;
-        _isLoadingLogs = true;
         _errorMessage = string.Empty;
 
         try
         {
-            _logLines = await LogService.GetLogLinesAsync(operation.OperationId, maxLines: null);
+            var path = Path.Combine(_logDirectory, logFile.Name);
+            if (!File.Exists(path))
+            {
+                _errorMessage = "Log file was not found.";
+                return;
+            }
+
+            var content = await File.ReadAllTextAsync(path);
+            await JS.InvokeVoidAsync("serverOpsDownloadTextFile", logFile.Name, content);
         }
         catch (Exception ex)
         {
-            _logLines = Array.Empty<string>();
             _errorMessage = string.IsNullOrWhiteSpace(ex.Message)
-                ? "Unable to load log lines."
+                ? "Unable to download log file."
                 : ex.Message;
         }
-        finally
-        {
-            _isLoadingLogs = false;
-        }
     }
 
-    private static string GetStatusCssClass(DeploymentStatus status) =>
-        status switch
-        {
-            DeploymentStatus.Succeeded => "success",
-            DeploymentStatus.Failed => "failed",
-            _ => "neutral"
-        };
+    private static string FormatTimestamp(DateTime value)
+        => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
 
-    private static string GetLogLevelCssClass(string line)
+    private sealed class LogFileItem
     {
-        if (line.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
-        {
-            return "error";
-        }
-
-        if (line.Contains("WARN", StringComparison.OrdinalIgnoreCase))
-        {
-            return "warn";
-        }
-
-        if (line.Contains("DEBUG", StringComparison.OrdinalIgnoreCase))
-        {
-            return "debug";
-        }
-
-        return "info";
-    }
-
-    private static string FormatTime(DateTimeOffset value) =>
-        value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
-
-    private sealed class OperationListItem
-    {
-        public string OperationId { get; init; } = string.Empty;
-        public string AppName { get; init; } = string.Empty;
-        public string AppDisplayName { get; init; } = string.Empty;
-        public DeploymentStatus Status { get; init; }
-        public DateTimeOffset StartedAtUtc { get; init; }
+        public string Name { get; init; } = string.Empty;
+        public DateTime LastModifiedUtc { get; init; }
     }
 }

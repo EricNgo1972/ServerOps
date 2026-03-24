@@ -24,7 +24,8 @@ public sealed class ExposureServiceTests
             registry,
             new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
             dns,
-            config);
+            config,
+            new FakeOperationLogger());
 
         await service.ExposeAsync("phoebus-api", "phoebus.local");
 
@@ -46,7 +47,8 @@ public sealed class ExposureServiceTests
             new FakeEndpointRegistry(),
             new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
             new FakeCloudflareDnsService(),
-            new FakeCloudflaredConfigService());
+            new FakeCloudflaredConfigService(),
+            new FakeOperationLogger());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExposeAsync("phoebus-api", "phoebus.local"));
     }
@@ -59,7 +61,8 @@ public sealed class ExposureServiceTests
             new FakeEndpointRegistry(),
             new FakeCloudflaredService(new TunnelInfo { IsRunning = false, TunnelId = "abc123" }),
             new FakeCloudflareDnsService(),
-            new FakeCloudflaredConfigService());
+            new FakeCloudflaredConfigService(),
+            new FakeOperationLogger());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExposeAsync("phoebus-api", "phoebus.local"));
     }
@@ -76,7 +79,8 @@ public sealed class ExposureServiceTests
             registry,
             new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
             dns,
-            config);
+            config,
+            new FakeOperationLogger());
 
         await service.UnexposeAsync("phoebus-api");
 
@@ -96,7 +100,8 @@ public sealed class ExposureServiceTests
             new FakeEndpointRegistry(),
             new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
             dns,
-            config);
+            config,
+            new FakeOperationLogger());
 
         await service.UnexposeAsync("phoebus-api");
 
@@ -117,7 +122,8 @@ public sealed class ExposureServiceTests
             registry,
             new FakeCloudflaredService(new TunnelInfo { IsRunning = true, TunnelId = "abc123" }),
             dns,
-            config);
+            config,
+            new FakeOperationLogger());
 
         await service.UpdateAsync("phoebus-api", "new.phoebus.local");
 
@@ -189,11 +195,26 @@ public sealed class ExposureServiceTests
 
         public Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo);
 
-        public Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default)
+        public Task<CommandResult> InstallAsync(string? operationId = null, CancellationToken cancellationToken = default)
             => Task.FromResult(new CommandResult());
 
-        public Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default)
+        public Task<CommandResult> CreateTunnelAsync(string? operationId = null, CancellationToken cancellationToken = default)
             => Task.FromResult(new CommandResult());
+
+        public Task<CommandResult> StartAsync(string? operationId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandResult());
+
+        public Task<CommandResult> RestartAsync(string? operationId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandResult());
+
+        public Task<CommandResult> DeleteTunnelAsync(string? operationId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandResult());
+    }
+
+    private sealed class FakeOperationLogger : IOperationLogger
+    {
+        public Task LogAsync(string operationId, string stage, string message, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     private sealed class FakeCloudflareDnsService : ICloudflareDnsService

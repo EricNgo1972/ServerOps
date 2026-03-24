@@ -28,26 +28,29 @@ public sealed class AppRemovalService : IAppRemovalService
         _operationLogger = operationLogger;
     }
 
-    public async Task<CommandResult> RemoveAsync(string appName, CancellationToken ct = default)
+    public async Task<CommandResult> RemoveAsync(string appName, string? operationId = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(appName))
         {
             return new CommandResult
             {
+                OperationId = operationId ?? string.Empty,
                 ExitCode = -1,
                 StdErr = "Application name is required."
             };
         }
 
         var normalizedAppName = appName.Trim();
-        var operationId = Guid.NewGuid().ToString("N");
+        operationId = string.IsNullOrWhiteSpace(operationId)
+            ? Guid.NewGuid().ToString("N")
+            : operationId.Trim();
         var messages = new List<string>();
 
         try
         {
             await _operationLogger.LogAsync(operationId, "Remove", $"Started app={normalizedAppName}", ct);
 
-            await _exposureService.UnexposeAsync(normalizedAppName, ct);
+            await _exposureService.UnexposeAsync(normalizedAppName, operationId, ct);
             messages.Add("Exposure removed");
             await _operationLogger.LogAsync(operationId, "Remove", "Exposure removed", ct);
 
@@ -56,12 +59,13 @@ public sealed class AppRemovalService : IAppRemovalService
 
             if (serviceExists)
             {
-                var stopResult = await _serviceControlService.StopAsync(normalizedAppName, ct);
+                var stopResult = await _serviceControlService.StopAsync(normalizedAppName, operationId, ct);
                 await _operationLogger.LogAsync(operationId, "Remove", $"Stop {Describe(stopResult)}", ct);
                 if (!stopResult.Succeeded && !IsAlreadyStopped(stopResult))
                 {
                     return new CommandResult
                     {
+                        OperationId = operationId,
                         ExitCode = stopResult.ExitCode == 0 ? -1 : stopResult.ExitCode,
                         StdErr = GetMessage("Failed to stop service.", stopResult)
                     };
@@ -75,6 +79,7 @@ public sealed class AppRemovalService : IAppRemovalService
                 {
                     return new CommandResult
                     {
+                        OperationId = operationId,
                         ExitCode = unregisterResult.ExitCode == 0 ? -1 : unregisterResult.ExitCode,
                         StdErr = GetMessage("Failed to unregister service.", unregisterResult)
                     };
@@ -103,6 +108,7 @@ public sealed class AppRemovalService : IAppRemovalService
             await _operationLogger.LogAsync(operationId, "Remove", "Completed", ct);
             return new CommandResult
             {
+                OperationId = operationId,
                 ExitCode = 0,
                 StdOut = string.Join(". ", messages)
             };
@@ -112,6 +118,7 @@ public sealed class AppRemovalService : IAppRemovalService
             await _operationLogger.LogAsync(operationId, "Remove", $"Failed error={ex.Message}", ct);
             return new CommandResult
             {
+                OperationId = operationId,
                 ExitCode = -1,
                 StdErr = ex.Message
             };

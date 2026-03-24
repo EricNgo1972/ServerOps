@@ -12,7 +12,7 @@
 }
 else if (!string.IsNullOrWhiteSpace(_errorMessage))
 {
-    <div class="dashboard-shell">
+    <div class="page-container">
         <div class="dashboard-status error">
             <strong>Unable to load dashboard.</strong>
             <span>@_errorMessage</span>
@@ -21,7 +21,7 @@ else if (!string.IsNullOrWhiteSpace(_errorMessage))
 }
 else if (_model is not null)
 {
-    <div class="dashboard-shell">
+    <div class="page-container">
         <header class="dashboard-header">
             <h1>Dashboard</h1>
             <p>Overall host status and quick summary.</p>

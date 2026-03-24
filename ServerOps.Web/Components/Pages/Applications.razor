@@ -6,6 +6,7 @@
 @inject IAppCatalogService AppCatalogService
 @inject IServiceControlService ServiceControlService
 @inject IAppRemovalService AppRemovalService
+@inject ServerOps.Web.Services.LiveOperationLogState LiveOperationLogState
 
 <PageTitle>Applications</PageTitle>
 
@@ -57,6 +58,22 @@
                                 <div class="app-runtime-item">
                                     <span class="runtime-label">Port</span>
                                     <span class="runtime-value">@GetPortText(app)</span>
+                                </div>
+                                <div class="app-runtime-item">
+                                    <span class="runtime-label">Local URL</span>
+                                    @if (GetLocalUrl(app) is { Length: > 0 } localUrl)
+                                    {
+                                        <a class="app-local-link"
+                                           href="@localUrl"
+                                           target="_blank"
+                                           rel="noopener noreferrer">
+                                            @localUrl
+                                        </a>
+                                    }
+                                    else
+                                    {
+                                        <span class="runtime-value">-</span>
+                                    }
                                 </div>
                             </div>
 
@@ -156,7 +173,7 @@
         finally
         {
             _isLoading = false;
-            await InvokeAsync(StateHasChanged);
+            StateHasChanged();
         }
     }
 
@@ -172,20 +189,22 @@
         _confirmingRemovalAppId = string.Empty;
         _message = string.Empty;
         _isError = false;
-        await InvokeAsync(StateHasChanged);
+        StateHasChanged();
+        var effectiveAction = action == ServiceAction.Restart && app.Status == ServiceStatus.Stopped
+            ? ServiceAction.Start
+            : action;
 
         try
         {
-            var effectiveAction = action == ServiceAction.Restart && app.Status == ServiceStatus.Stopped
-                ? ServiceAction.Start
-                : action;
+            var operationId = Guid.NewGuid().ToString("N");
+            LiveOperationLogState.Open(operationId, $"{effectiveAction} {app.ServiceName}");
 
             var result = action switch
             {
-                ServiceAction.Start => await ServiceControlService.StartAsync(app.ServiceName),
-                ServiceAction.Stop => await ServiceControlService.StopAsync(app.ServiceName),
-                ServiceAction.Restart when effectiveAction == ServiceAction.Start => await ServiceControlService.StartAsync(app.ServiceName),
-                _ => await ServiceControlService.RestartAsync(app.ServiceName)
+                ServiceAction.Start => await ServiceControlService.StartAsync(app.ServiceName, operationId),
+                ServiceAction.Stop => await ServiceControlService.StopAsync(app.ServiceName, operationId),
+                ServiceAction.Restart when effectiveAction == ServiceAction.Start => await ServiceControlService.StartAsync(app.ServiceName, operationId),
+                _ => await ServiceControlService.RestartAsync(app.ServiceName, operationId)
             };
 
             _message = BuildResultMessage(app, effectiveAction, result);
@@ -201,8 +220,13 @@
         finally
         {
             _processingAppId = string.Empty;
-            await InvokeAsync(StateHasChanged);
+            if (!_isError && effectiveAction is ServiceAction.Start or ServiceAction.Restart)
+            {
+                await Task.Delay(1500);
+            }
+
             await LoadAppsAsync();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -234,7 +258,9 @@
 
         try
         {
-            var result = await AppRemovalService.RemoveAsync(app.ServiceName);
+            var operationId = Guid.NewGuid().ToString("N");
+            LiveOperationLogState.Open(operationId, $"Remove {app.ServiceName}");
+            var result = await AppRemovalService.RemoveAsync(app.ServiceName, operationId);
             _message = BuildRemovalMessage(app, result);
             _isError = !result.Succeeded;
         }
@@ -248,8 +274,10 @@
         finally
         {
             _processingAppId = string.Empty;
-            await InvokeAsync(StateHasChanged);
+            
             await LoadAppsAsync();
+
+            StateHasChanged();
         }
     }
 
@@ -261,6 +289,11 @@
 
     private static string GetPortText(AppInstance app) =>
         app.Ports.Count == 0 ? "-" : app.Ports[0].ToString();
+
+    private static string? GetLocalUrl(AppInstance app) =>
+        app.Ports.Count == 0 || app.Ports[0] <= 0
+            ? null
+            : $"http://localhost:{app.Ports[0]}";
 
     private static string GetStatusCssClass(ServiceStatus status) =>
         status switch
@@ -326,4 +359,5 @@
         Stop,
         Restart
     }
+
 }

@@ -26,18 +26,19 @@ public sealed class OneClickDeployService : IOneClickDeployService
     public async Task<OneClickDeployResult> DeployAsync(OneClickDeployRequest request, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var operationId = string.IsNullOrWhiteSpace(request.OperationId)
+            ? Guid.NewGuid().ToString("N")
+            : request.OperationId.Trim();
 
         if (string.IsNullOrWhiteSpace(request.AppName))
         {
-            return CreateFailureResult("Application name is required.");
+            return CreateFailureResult(operationId, "Application name is required.");
         }
 
         if (string.IsNullOrWhiteSpace(request.AssetUrl))
         {
-            return CreateFailureResult("Asset URL is required.");
+            return CreateFailureResult(operationId, "Asset URL is required.");
         }
-
-        var operationId = Guid.NewGuid().ToString("N");
         await _operationLogger.LogAsync(operationId, "OneClick", "Started", ct);
 
         string? hostname;
@@ -49,7 +50,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
         {
             if (string.IsNullOrWhiteSpace(request.DomainSuffix))
             {
-                return CreateFailureResult("Domain suffix is required.");
+                return CreateFailureResult(operationId, "Domain suffix is required.");
             }
 
             try
@@ -58,7 +59,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {
-                return CreateFailureResult(ex.Message);
+                return CreateFailureResult(operationId, ex.Message);
             }
         }
         else
@@ -66,12 +67,13 @@ public sealed class OneClickDeployService : IOneClickDeployService
             hostname = null;
         }
 
-        var deployment = await _deploymentService.DeployAsync(request.AppName, request.AssetUrl, request.PortOverride, ct);
+        var deployment = await _deploymentService.DeployAsync(request.AppName, request.AssetUrl, request.PortOverride, operationId, ct);
         await _operationLogger.LogAsync(operationId, "Deployment", deployment.Status.ToString(), ct);
         if (deployment.Status != DeploymentStatus.Succeeded)
         {
             return new OneClickDeployResult
             {
+                OperationId = operationId,
                 Deployment = deployment,
                 Hostname = hostname,
                 PublicUrl = string.IsNullOrWhiteSpace(hostname) ? null : $"https://{hostname}",
@@ -84,6 +86,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
         {
             return new OneClickDeployResult
             {
+                OperationId = operationId,
                 Deployment = deployment,
                 Exposed = false,
                 Message = "Deployment succeeded, but no hostname was provided."
@@ -92,11 +95,12 @@ public sealed class OneClickDeployService : IOneClickDeployService
 
         try
         {
-            await _exposureService.ExposeAsync(request.AppName, hostname, ct);
+            await _exposureService.ExposeAsync(request.AppName, hostname, operationId, ct);
             await _operationLogger.LogAsync(operationId, "Exposure", "Succeeded", ct);
 
             return new OneClickDeployResult
             {
+                OperationId = operationId,
                 Deployment = deployment,
                 Hostname = hostname,
                 PublicUrl = $"https://{hostname}",
@@ -109,6 +113,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
             await _operationLogger.LogAsync(operationId, "Exposure", "Failed", ct);
             return new OneClickDeployResult
             {
+                OperationId = operationId,
                 Deployment = deployment,
                 Hostname = hostname,
                 PublicUrl = $"https://{hostname}",
@@ -120,12 +125,14 @@ public sealed class OneClickDeployService : IOneClickDeployService
         }
     }
 
-    private static OneClickDeployResult CreateFailureResult(string message)
+    private static OneClickDeployResult CreateFailureResult(string operationId, string message)
     {
         return new OneClickDeployResult
         {
+            OperationId = operationId,
             Deployment = new DeploymentResult
             {
+                OperationId = operationId,
                 Status = DeploymentStatus.Failed,
                 Stage = DeploymentStage.Failed,
                 Message = message,

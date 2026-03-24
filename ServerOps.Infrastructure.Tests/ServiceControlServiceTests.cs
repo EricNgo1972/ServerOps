@@ -12,7 +12,7 @@ public sealed class ServiceControlServiceTests
     public async Task StartAsync_Uses_Systemctl_On_Linux()
     {
         var runner = new FakeCommandRunner();
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Linux));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Linux), new FakeOperationLogger());
 
         await service.StartAsync("phoebus");
 
@@ -25,7 +25,7 @@ public sealed class ServiceControlServiceTests
     public async Task StopAsync_Uses_Systemctl_On_Linux()
     {
         var runner = new FakeCommandRunner();
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Linux));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Linux), new FakeOperationLogger());
 
         await service.StopAsync("phoebus");
 
@@ -38,7 +38,7 @@ public sealed class ServiceControlServiceTests
     public async Task RestartAsync_Uses_Systemctl_Restart_On_Linux()
     {
         var runner = new FakeCommandRunner();
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Linux));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Linux), new FakeOperationLogger());
 
         await service.RestartAsync("phoebus");
 
@@ -51,7 +51,7 @@ public sealed class ServiceControlServiceTests
     public async Task StartAsync_Uses_Sc_On_Windows()
     {
         var runner = new FakeCommandRunner();
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows), new FakeOperationLogger());
 
         await service.StartAsync("Spooler");
 
@@ -64,7 +64,7 @@ public sealed class ServiceControlServiceTests
     public async Task StopAsync_Uses_Sc_On_Windows()
     {
         var runner = new FakeCommandRunner();
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows), new FakeOperationLogger());
 
         await service.StopAsync("Spooler");
 
@@ -80,7 +80,7 @@ public sealed class ServiceControlServiceTests
             new CommandResult { ExitCode = 0, StdOut = "stop issued" },
             new CommandResult { ExitCode = 0, StdOut = "STATE : 1  STOPPED" },
             new CommandResult { ExitCode = 0, StdOut = "start issued" });
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows), new FakeOperationLogger());
 
         await service.RestartAsync("Spooler");
 
@@ -102,7 +102,7 @@ public sealed class ServiceControlServiceTests
             new CommandResult { ExitCode = 0, StdOut = "STATE : 3  STOP_PENDING" },
             new CommandResult { ExitCode = 0, StdOut = "STATE : 1  STOPPED" },
             new CommandResult { ExitCode = 0, StdOut = "start issued" });
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows), new FakeOperationLogger());
 
         await service.RestartAsync("Spooler");
 
@@ -119,7 +119,7 @@ public sealed class ServiceControlServiceTests
     public async Task Invalid_Service_Name_Throws_ArgumentException()
     {
         var runner = new FakeCommandRunner();
-        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows));
+        var service = new ServiceControlService(runner, new FakeRuntimeEnvironment(OsType.Windows), new FakeOperationLogger());
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.StartAsync("   "));
         await Assert.ThrowsAsync<ArgumentException>(() => service.StopAsync(string.Empty));
@@ -170,5 +170,11 @@ public sealed class ServiceControlServiceTests
         public string GetCloudflaredConfigPath() => string.Empty;
 
         public string GetSystemdServiceDirectory() => string.Empty;
+    }
+
+    private sealed class FakeOperationLogger : IOperationLogger
+    {
+        public Task LogAsync(string operationId, string stage, string message, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 }

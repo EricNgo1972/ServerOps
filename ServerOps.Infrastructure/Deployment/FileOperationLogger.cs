@@ -8,11 +8,13 @@ public sealed class FileOperationLogger : IOperationLogger
     private static readonly SemaphoreSlim LogLock = new(1, 1);
     private readonly IFileSystem _fileSystem;
     private readonly IRuntimeEnvironment _runtimeEnvironment;
+    private readonly IOperationLogStream _operationLogStream;
 
-    public FileOperationLogger(IFileSystem fileSystem, IRuntimeEnvironment runtimeEnvironment)
+    public FileOperationLogger(IFileSystem fileSystem, IRuntimeEnvironment runtimeEnvironment, IOperationLogStream operationLogStream)
     {
         _fileSystem = fileSystem;
         _runtimeEnvironment = runtimeEnvironment;
+        _operationLogStream = operationLogStream;
     }
 
     public async Task LogAsync(string operationId, string stage, string message, CancellationToken ct = default)
@@ -41,6 +43,21 @@ public sealed class FileOperationLogger : IOperationLogger
         finally
         {
             LogLock.Release();
+        }
+
+        try
+        {
+            await _operationLogStream.PublishAsync(new ServerOps.Application.DTOs.OperationLogEvent
+            {
+                OperationId = operationId,
+                Stage = stage,
+                Message = message,
+                Line = line,
+                TimestampUtc = DateTimeOffset.UtcNow
+            }, ct);
+        }
+        catch
+        {
         }
     }
 }

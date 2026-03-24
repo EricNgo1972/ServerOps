@@ -175,9 +175,9 @@ public sealed class RollbackServiceTests
             _startResult = startResult ?? new CommandResult { ExitCode = 0 };
         }
 
-        public Task<CommandResult> StartAsync(string serviceName, CancellationToken ct = default) => Task.FromResult(_startResult);
-        public Task<CommandResult> StopAsync(string serviceName, CancellationToken ct = default) => Task.FromResult(new CommandResult { ExitCode = 0 });
-        public Task<CommandResult> RestartAsync(string serviceName, CancellationToken ct = default) => Task.FromResult(new CommandResult { ExitCode = 0 });
+        public Task<CommandResult> StartAsync(string serviceName, string? operationId = null, CancellationToken ct = default) => Task.FromResult(_startResult);
+        public Task<CommandResult> StopAsync(string serviceName, string? operationId = null, CancellationToken ct = default) => Task.FromResult(new CommandResult { ExitCode = 0 });
+        public Task<CommandResult> RestartAsync(string serviceName, string? operationId = null, CancellationToken ct = default) => Task.FromResult(new CommandResult { ExitCode = 0 });
     }
 
     private sealed class FakeHealthVerificationService : IHealthVerificationService

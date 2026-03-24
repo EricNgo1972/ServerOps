@@ -12,6 +12,8 @@ public sealed class CommandRunner : ICommandRunner
         "systemctl",
         "ss",
         "cloudflared",
+        "apt-get",
+        "chmod",
         "id",
         "useradd",
         "chown"
@@ -22,7 +24,9 @@ public sealed class CommandRunner : ICommandRunner
         "sc",
         "net",
         "netstat",
-        "cloudflared"
+        "cloudflared",
+        "winget",
+        "powershell"
     };
 
     private readonly IRuntimeEnvironment _runtimeEnvironment;
@@ -96,10 +100,16 @@ public sealed class CommandRunner : ICommandRunner
 
     private bool IsAllowedCommand(string command)
     {
+        var normalizedCommand = command;
+        if (command.Contains(Path.DirectorySeparatorChar) || command.Contains(Path.AltDirectorySeparatorChar))
+        {
+            normalizedCommand = Path.GetFileNameWithoutExtension(command);
+        }
+
         return _runtimeEnvironment.GetCurrentOs() switch
         {
-            OsType.Linux => LinuxCommands.Contains(command),
-            OsType.Windows => WindowsCommands.Contains(command),
+            OsType.Linux => LinuxCommands.Contains(normalizedCommand),
+            OsType.Windows => WindowsCommands.Contains(normalizedCommand),
             _ => false
         };
     }

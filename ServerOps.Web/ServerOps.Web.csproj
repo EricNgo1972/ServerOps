@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.19" />
     <ProjectReference Include="..\ServerOps.Application\ServerOps.Application.csproj" />
     <ProjectReference Include="..\ServerOps.Domain\ServerOps.Domain.csproj" />
     <ProjectReference Include="..\ServerOps.Infrastructure\ServerOps.Infrastructure.csproj" />

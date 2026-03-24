@@ -1,0 +1,214 @@
+@using Microsoft.AspNetCore.SignalR.Client
+@using ServerOps.Application.DTOs
+@implements IAsyncDisposable
+@inject NavigationManager NavigationManager
+@inject ILogService LogService
+@inject ServerOps.Web.Services.LiveOperationLogState LiveOperationLogState
+
+@if (LiveOperationLogState.IsOpen)
+{
+    <section class="live-log-drawer">
+        <div class="live-log-header">
+            <div>
+                <h2>@LiveOperationLogState.Title</h2>
+                <p class="page-description">Operation: @LiveOperationLogState.OperationId</p>
+            </div>
+            <div class="action-group">
+                @if (_isConnecting)
+                {
+                    <span class="live-log-status">Connecting...</span>
+                }
+                else if (_connectionError.Length > 0)
+                {
+                    <span class="live-log-status error">@_connectionError</span>
+                }
+                else
+                {
+                    <span class="live-log-status">Live</span>
+                }
+
+                <button type="button" class="btn btn-secondary" @onclick="Close">Close</button>
+            </div>
+        </div>
+
+        <div class="live-log-body">
+            @if (_isLoadingHistory)
+            {
+                <ActivityIndicator Title="Loading logs" Message="Fetching existing log lines for this operation." />
+            }
+            else if (_lines.Count == 0)
+            {
+                <p class="page-description">Waiting for log output.</p>
+            }
+            else
+            {
+                <div class="live-log-viewer">
+                    @foreach (var line in _lines)
+                    {
+                        <div class="log-line @GetLogLevelCssClass(line)">@line</div>
+                    }
+                </div>
+            }
+        </div>
+    </section>
+}
+
+@code {
+    private HubConnection? _hubConnection;
+    private string _currentOperationId = string.Empty;
+    private readonly List<string> _lines = new();
+    private bool _isLoadingHistory;
+    private bool _isConnecting;
+    private string _connectionError = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        LiveOperationLogState.Changed += HandleStateChanged;
+    }
+
+    private void HandleStateChanged()
+    {
+        _ = InvokeAsync(LoadCurrentOperationAsync);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await LoadCurrentOperationAsync();
+        }
+    }
+
+    private async Task LoadCurrentOperationAsync()
+    {
+        if (!LiveOperationLogState.IsOpen || string.IsNullOrWhiteSpace(LiveOperationLogState.OperationId))
+        {
+            _currentOperationId = string.Empty;
+            _lines.Clear();
+            await DisposeConnectionAsync();
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        if (string.Equals(_currentOperationId, LiveOperationLogState.OperationId, StringComparison.Ordinal))
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        _currentOperationId = LiveOperationLogState.OperationId;
+        _lines.Clear();
+        _connectionError = string.Empty;
+        _isLoadingHistory = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var history = await LogService.GetLogLinesAsync(_currentOperationId, maxLines: null);
+            _lines.AddRange(history);
+        }
+        catch (Exception ex)
+        {
+            _connectionError = string.IsNullOrWhiteSpace(ex.Message) ? "Unable to load logs." : ex.Message;
+        }
+        finally
+        {
+            _isLoadingHistory = false;
+        }
+
+        await ConnectAsync(_currentOperationId);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ConnectAsync(string operationId)
+    {
+        await DisposeConnectionAsync();
+        _isConnecting = true;
+        _connectionError = string.Empty;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            _hubConnection = new HubConnectionBuilder()
+                .WithUrl(NavigationManager.ToAbsoluteUri("/hubs/operation-log"))
+                .WithAutomaticReconnect()
+                .Build();
+
+            _hubConnection.On<OperationLogEvent>("log", logEvent =>
+            {
+                if (!string.Equals(logEvent.OperationId, _currentOperationId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                _lines.Add(logEvent.Line);
+                _ = InvokeAsync(StateHasChanged);
+            });
+
+            await _hubConnection.StartAsync();
+            await _hubConnection.InvokeAsync("JoinOperation", operationId);
+        }
+        catch (Exception ex)
+        {
+            _connectionError = string.IsNullOrWhiteSpace(ex.Message) ? "Unable to connect to live logs." : ex.Message;
+        }
+        finally
+        {
+            _isConnecting = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task DisposeConnectionAsync()
+    {
+        if (_hubConnection is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_currentOperationId))
+            {
+                await _hubConnection.InvokeAsync("LeaveOperation", _currentOperationId);
+            }
+        }
+        catch
+        {
+        }
+
+        await _hubConnection.DisposeAsync();
+        _hubConnection = null;
+    }
+
+    private void Close()
+    {
+        LiveOperationLogState.Close();
+    }
+
+    private static string GetLogLevelCssClass(string line)
+    {
+        if (line.Contains("ERROR", StringComparison.OrdinalIgnoreCase))
+        {
+            return "error";
+        }
+
+        if (line.Contains("WARN", StringComparison.OrdinalIgnoreCase))
+        {
+            return "warn";
+        }
+
+        if (line.Contains("DEBUG", StringComparison.OrdinalIgnoreCase))
+        {
+            return "debug";
+        }
+
+        return "info";
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        LiveOperationLogState.Changed -= HandleStateChanged;
+        await DisposeConnectionAsync();
+    }
+}

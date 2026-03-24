@@ -155,10 +155,19 @@ public sealed class EndpointServiceTests
 
         public Task<TunnelInfo> GetTunnelInfoAsync(CancellationToken cancellationToken = default) => Task.FromResult(_tunnelInfo);
 
-        public Task<CommandResult> InstallAsync(CancellationToken cancellationToken = default)
+        public Task<CommandResult> InstallAsync(string? operationId = null, CancellationToken cancellationToken = default)
             => Task.FromResult(new CommandResult());
 
-        public Task<CommandResult> RestartAsync(CancellationToken cancellationToken = default)
+        public Task<CommandResult> CreateTunnelAsync(string? operationId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandResult());
+
+        public Task<CommandResult> StartAsync(string? operationId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandResult());
+
+        public Task<CommandResult> RestartAsync(string? operationId = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new CommandResult());
+
+        public Task<CommandResult> DeleteTunnelAsync(string? operationId = null, CancellationToken cancellationToken = default)
             => Task.FromResult(new CommandResult());
     }
 }

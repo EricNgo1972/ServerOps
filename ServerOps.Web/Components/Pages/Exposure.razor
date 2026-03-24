@@ -1,4 +1,16 @@
 @page "/exposure"
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using ServerOps.Application.Models
+@rendermode InteractiveServer
+@inject IAppCatalogService AppCatalogService
+@inject IEndpointService EndpointService
+@inject IEndpointRegistry EndpointRegistry
+@inject IExposureService ExposureService
+@inject IDomainNameBuilder DomainNameBuilder
+@inject IDomainSuffixRegistry DomainSuffixRegistry
+@inject ICloudflaredService CloudflaredService
+@inject ServerOps.Web.Services.LiveOperationLogState LiveOperationLogState
+@inject ILogger<Exposure> Logger
 
 <PageTitle>Exposure</PageTitle>
 
@@ -10,8 +22,724 @@
         </div>
     </div>
 
-    <section class="card">
-        <h2>Coming next</h2>
-        <p class="page-description">Exposure and tunnel management will be added in the next phase.</p>
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="message-area @(_isError ? "error" : "success")">
+            @_message
+        </div>
+    }
+
+    <section class="card exposure-shell">
+        @if (_tunnelLoaded)
+        {
+            <div class="exposure-tunnel-panel">
+                <div class="exposure-tunnel-summary">
+                    <div class="exposure-tunnel-header">
+                        <div>
+                            <h2>Cloudflared Tunnel</h2>
+                            <p class="page-description">Install cloudflared, create the shared host tunnel, and launch it.</p>
+                        </div>
+                        <div class="action-group">
+                            @if (_tunnelInfo is not null && !_tunnelInfo.IsInstalled)
+                            {
+                                <button type="button"
+                                        class="btn btn-secondary"
+                                        disabled="@_isTunnelActionRunning"
+                                        @onclick="InstallTunnelAsync">
+                                    Install cloudflared
+                                </button>
+                            }
+
+                            @if (_tunnelInfo is not null && _tunnelInfo.IsInstalled && !_tunnelInfo.IsConfigured)
+                            {
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        disabled="@_isTunnelActionRunning"
+                                        @onclick="CreateTunnelAsync">
+                                    Create tunnel
+                                </button>
+                            }
+
+                            @if (_tunnelInfo is not null && _tunnelInfo.IsConfigured && !_tunnelInfo.IsRunning)
+                            {
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        disabled="@_isTunnelActionRunning"
+                                        @onclick="StartTunnelAsync">
+                                    Start tunnel
+                                </button>
+                            }
+
+                            @if (_tunnelInfo is not null && _tunnelInfo.IsConfigured && _tunnelInfo.IsRunning)
+                            {
+                                <button type="button"
+                                        class="btn btn-secondary"
+                                        disabled="@_isTunnelActionRunning"
+                                        @onclick="RestartTunnelAsync">
+                                    Restart tunnel
+                                </button>
+                            }
+
+                            @if (_tunnelInfo is not null && _tunnelInfo.IsConfigured)
+                            {
+                                @if (_isDeleteTunnelConfirming)
+                                {
+                                    <div class="inline-confirm inline-confirm-warning">
+                                        <span class="inline-confirm-text">
+                                            Delete this tunnel and remove all exposed app CNAMEs and mappings? @GetTunnelDeleteImpactText()
+                                        </span>
+                                        <button type="button"
+                                                class="btn btn-danger"
+                                                disabled="@_isTunnelActionRunning"
+                                                @onclick="ConfirmDeleteTunnelAsync">
+                                            Delete tunnel
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-secondary"
+                                                disabled="@_isTunnelActionRunning"
+                                                @onclick="CancelDeleteTunnel">
+                                            Cancel
+                                        </button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="btn btn-danger"
+                                            disabled="@_isTunnelActionRunning"
+                                            @onclick="PromptDeleteTunnel">
+                                        Delete tunnel
+                                    </button>
+                                }
+                            }
+                        </div>
+                    </div>
+
+                    <div class="exposure-tunnel-metrics">
+                        <div class="exposure-tunnel-item">
+                            <span class="runtime-label">Binary</span>
+                            <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsInstalled == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsInstalled == true)</span>
+                        </div>
+                        <div class="exposure-tunnel-item">
+                            <span class="runtime-label">Configured</span>
+                            <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsConfigured == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsConfigured == true)</span>
+                        </div>
+                        <div class="exposure-tunnel-item">
+                            <span class="runtime-label">Service</span>
+                            <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsServiceInstalled == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsServiceInstalled == true)</span>
+                        </div>
+                        <div class="exposure-tunnel-item">
+                            <span class="runtime-label">Running</span>
+                            <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsRunning == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsRunning == true)</span>
+                        </div>
+                    </div>
+
+                    @if (!string.IsNullOrWhiteSpace(_tunnelInfo?.TunnelId))
+                    {
+                        <div class="exposure-tunnel-id">Tunnel ID: @_tunnelInfo!.TunnelId</div>
+                    }
+                </div>
+            </div>
+        }
+
+        @if (_isLoading)
+        {
+            <ActivityIndicator Title="Loading exposure" Message="Fetching applications and current domain mappings." />
+        }
+        else if (_apps.Count == 0)
+        {
+            <p class="page-description">No managed applications found.</p>
+        }
+        else
+        {
+            <div class="exposure-list">
+                <div class="exposure-grid exposure-grid-header">
+                    <div>App</div>
+                    <div>Port</div>
+                    <div>Domain</div>
+                    <div>Status</div>
+                    <div>Actions</div>
+                </div>
+
+                @foreach (var app in _apps)
+                {
+                    var rowId = GetRowId(app);
+                    var normalizedServiceName = NormalizeServiceName(app.ServiceName);
+                    var endpoint = _endpointLookup.TryGetValue(normalizedServiceName, out var existingEndpoint)
+                        ? existingEndpoint
+                        : null;
+                    var mapping = FindMapping(app.ServiceName);
+                    var domainLabel = GetDraftDomainLabel(app, endpoint);
+                    var domainSuffix = GetSelectedDomainSuffix(app, endpoint);
+                    var fullHostname = BuildHostname(domainLabel, domainSuffix);
+                    var isProcessing = string.Equals(_processingAppId, rowId, StringComparison.Ordinal);
+                    var effectiveHostname = string.IsNullOrWhiteSpace(mapping?.Hostname) ? endpoint?.Hostname : mapping!.Hostname;
+                    var isExposed = !string.IsNullOrWhiteSpace(effectiveHostname);
+                    
+                    var tunnelReady = _tunnelInfo?.IsConfigured == true && _tunnelInfo.IsRunning;
+
+                    var isDisable = isProcessing || _isTunnelActionRunning || !tunnelReady || !CanExpose(app);
+
+                    <div class="exposure-grid exposure-row">
+                        <div class="exposure-app">
+                            <div class="exposure-app-name">@GetAppName(app)</div>
+                            <div class="exposure-app-meta">@app.ServiceName</div>
+                        </div>
+                        <div class="exposure-port">@GetPortText(app, endpoint)</div>
+                        <div class="exposure-domain">
+                            <div class="exposure-domain-composer">
+                                <input class="exposure-domain-input"
+                                       value="@domainLabel"
+                                       disabled="@isProcessing"
+                                       @oninput="args => OnDomainLabelChanged(app, args.Value?.ToString())" />
+                                <select class="exposure-domain-select"
+                                        value="@domainSuffix"
+                                        disabled="@isProcessing || _domainSuffixes.Count == 0"
+                                        @onchange="args => OnDomainSuffixChanged(app, args.Value?.ToString())">
+                                    <option value="">Select suffix</option>
+                                    @foreach (var suffix in _domainSuffixes)
+                                    {
+                                        <option value="@suffix">@suffix</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="exposure-domain-preview">
+                                @if (!string.IsNullOrWhiteSpace(fullHostname))
+                                {
+                                    <a class="app-local-link"
+                                       href="@($"https://{fullHostname}")"
+                                       target="_blank"
+                                       rel="noopener noreferrer">
+                                        @fullHostname
+                                    </a>
+                                }
+                                else
+                                {
+                                    <span>-</span>
+                                }
+                            </div>
+                        </div>
+                        <div>
+                            <span class="app-badge @(isExposed ? "running" : "stopped")">
+                                @(isExposed ? "Exposed" : "Not exposed")
+                            </span>
+                        </div>
+                        <div class="action-group">
+                            @if (isExposed)
+                            {
+                                <button type="button"
+                                        class="btn btn-secondary"
+                                        disabled="@isProcessing || _isTunnelActionRunning || !tunnelReady || !CanUpdate(app, endpoint)"
+                                        @onclick="() => UpdateExposureAsync(app)">
+                                    Update
+                                </button>
+                                <button type="button"
+                                        class="btn btn-danger"
+                                        disabled="@isProcessing || _isTunnelActionRunning"
+                                        @onclick="() => RemoveExposureAsync(app)">
+                                    Remove
+                                </button>
+                            }
+                            else
+                            {
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        disabled ="@isDisable"
+                                        @onclick="() => ExposeAsync(app)">
+                                    Expose
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
     </section>
 </div>
+
+@code {
+    private IReadOnlyList<AppInstance> _apps = Array.Empty<AppInstance>();
+    private IReadOnlyList<string> _domainSuffixes = Array.Empty<string>();
+    private readonly Dictionary<string, ServiceEndpoint> _endpointLookup = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<EndpointMapping> _mappings = Array.Empty<EndpointMapping>();
+    private readonly Dictionary<string, string> _draftDomainLabels = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _selectedDomainSuffixes = new(StringComparer.OrdinalIgnoreCase);
+    private bool _isLoading = true;
+    private string _processingAppId = string.Empty;
+    private string _message = string.Empty;
+    private bool _isError;
+    private bool _tunnelLoaded;
+    private bool _isTunnelActionRunning;
+    private bool _isDeleteTunnelConfirming;
+    private TunnelInfo? _tunnelInfo;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _isLoading = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var appsTask = AppCatalogService.GetApplicationsAsync();
+            var endpointsTask = EndpointService.GetEndpointsAsync();
+            var mappingsTask = EndpointRegistry.GetMappingsAsync();
+            var suffixesTask = DomainSuffixRegistry.GetSuffixesAsync();
+            var tunnelTask = LoadTunnelStatusAsync();
+
+            await Task.WhenAll(appsTask, endpointsTask, mappingsTask, suffixesTask, tunnelTask);
+
+            _apps = (await appsTask)
+                .OrderBy(GetAppName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(app => app.ServiceName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _endpointLookup.Clear();
+            _mappings = Array.Empty<EndpointMapping>();
+            _domainSuffixes = (await suffixesTask)
+                .Where(suffix => !string.IsNullOrWhiteSpace(suffix))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(suffix => suffix, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _mappings = await mappingsTask;
+
+            foreach (var endpoint in await endpointsTask)
+            {
+                var normalizedServiceName = NormalizeServiceName(endpoint.ServiceName);
+                var mapping = FindMapping(endpoint.ServiceName);
+
+                _endpointLookup[normalizedServiceName] = new ServiceEndpoint
+                {
+                    ServiceName = endpoint.ServiceName,
+                    Port = endpoint.Port,
+                    Hostname = string.IsNullOrWhiteSpace(mapping?.Hostname) ? endpoint.Hostname : mapping!.Hostname,
+                    IsExposed = !string.IsNullOrWhiteSpace(mapping?.Hostname) || endpoint.IsExposed,
+                    PublicUrl = !string.IsNullOrWhiteSpace(mapping?.Hostname)
+                        ? $"https://{mapping!.Hostname}"
+                        : endpoint.PublicUrl
+                };
+            }
+
+            foreach (var app in _apps)
+            {
+                var normalizedServiceName = NormalizeServiceName(app.ServiceName);
+                if (_endpointLookup.TryGetValue(normalizedServiceName, out var endpoint))
+                {
+                    continue;
+                }
+
+                var mapping = FindMapping(app.ServiceName);
+
+                _endpointLookup[normalizedServiceName] = new ServiceEndpoint
+                {
+                    ServiceName = app.ServiceName,
+                    Port = app.Ports.FirstOrDefault(),
+                    Hostname = mapping?.Hostname,
+                    IsExposed = !string.IsNullOrWhiteSpace(mapping?.Hostname),
+                    PublicUrl = string.IsNullOrWhiteSpace(mapping?.Hostname) ? null : $"https://{mapping.Hostname}"
+                };
+            }
+
+            _draftDomainLabels.Clear();
+            _selectedDomainSuffixes.Clear();
+            foreach (var app in _apps)
+            {
+                _draftDomainLabels[app.ServiceName] = GetInitialDomainLabel(app);
+                _selectedDomainSuffixes[app.ServiceName] = GetInitialDomainSuffix(app);
+            }
+
+            LogExposureDiagnostics();
+        }
+        catch (Exception ex)
+        {
+            _apps = Array.Empty<AppInstance>();
+            _domainSuffixes = Array.Empty<string>();
+            _endpointLookup.Clear();
+            _mappings = Array.Empty<EndpointMapping>();
+            _draftDomainLabels.Clear();
+            _selectedDomainSuffixes.Clear();
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to load exposure data."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task LoadTunnelStatusAsync()
+    {
+        try
+        {
+            _tunnelInfo = await CloudflaredService.GetTunnelInfoAsync();
+            _tunnelLoaded = true;
+        }
+        catch
+        {
+            _tunnelInfo = null;
+            _tunnelLoaded = false;
+        }
+    }
+
+    private async Task InstallTunnelAsync()
+    {
+        await ExecuteTunnelActionAsync("Install cloudflared", operationId => CloudflaredService.InstallAsync(operationId));
+    }
+
+    private async Task CreateTunnelAsync()
+    {
+        await ExecuteTunnelActionAsync("Create tunnel", operationId => CloudflaredService.CreateTunnelAsync(operationId));
+    }
+
+    private async Task StartTunnelAsync()
+    {
+        await ExecuteTunnelActionAsync("Start tunnel", operationId => CloudflaredService.StartAsync(operationId));
+    }
+
+    private async Task RestartTunnelAsync()
+    {
+        await ExecuteTunnelActionAsync("Restart tunnel", operationId => CloudflaredService.RestartAsync(operationId));
+    }
+
+    private void PromptDeleteTunnel()
+    {
+        if (_isTunnelActionRunning)
+        {
+            return;
+        }
+
+        _isDeleteTunnelConfirming = true;
+    }
+
+    private void CancelDeleteTunnel()
+    {
+        _isDeleteTunnelConfirming = false;
+    }
+
+    private async Task ConfirmDeleteTunnelAsync()
+    {
+        await ExecuteTunnelActionAsync("Delete tunnel", operationId => CloudflaredService.DeleteTunnelAsync(operationId));
+    }
+
+    private async Task ExecuteTunnelActionAsync(string title, Func<string, Task<CommandResult>> action)
+    {
+        if (_isTunnelActionRunning)
+        {
+            return;
+        }
+
+        _isTunnelActionRunning = true;
+        _isDeleteTunnelConfirming = false;
+        _message = string.Empty;
+        _isError = false;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var operationId = Guid.NewGuid().ToString("N");
+            LiveOperationLogState.Open(operationId, title);
+            var result = await action(operationId);
+            var message = result.Succeeded
+                ? GetFirstMeaningfulLine(result.StdOut) is { Length: > 0 } successMessage ? successMessage : "Tunnel action completed successfully."
+                : GetFirstMeaningfulLine(result.StdErr) is { Length: > 0 } errorMessage ? errorMessage : "Tunnel action failed.";
+            var isError = !result.Succeeded;
+            await LoadAsync();
+            _message = message;
+            _isError = isError;
+        }
+        catch (Exception ex)
+        {
+            var message = string.IsNullOrWhiteSpace(ex.Message) ? "Tunnel action failed." : ex.Message;
+            await LoadAsync();
+            _message = message;
+            _isError = true;
+        }
+        finally
+        {
+            _isTunnelActionRunning = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void OnDomainLabelChanged(AppInstance app, string? value)
+    {
+        _draftDomainLabels[app.ServiceName] = value?.Trim() ?? string.Empty;
+    }
+
+    private void OnDomainSuffixChanged(AppInstance app, string? value)
+    {
+        _selectedDomainSuffixes[app.ServiceName] = value?.Trim() ?? string.Empty;
+    }
+
+    private async Task ExposeAsync(AppInstance app)
+    {
+        
+
+        await ExecuteExposureActionAsync(app, "Expose", operationId => ExposureService.ExposeAsync(app.ServiceName, BuildHostnameForApp(app, null), operationId));
+    }
+
+    private async Task UpdateExposureAsync(AppInstance app)
+    {
+        await ExecuteExposureActionAsync(app, "Update exposure", operationId => ExposureService.UpdateAsync(app.ServiceName, BuildHostnameForApp(app, _endpointLookup[app.ServiceName]), operationId));
+    }
+
+    private async Task RemoveExposureAsync(AppInstance app)
+    {
+        await ExecuteExposureActionAsync(app, "Remove exposure", operationId => ExposureService.UnexposeAsync(app.ServiceName, operationId));
+    }
+
+    private async Task ExecuteExposureActionAsync(AppInstance app, string actionTitle, Func<string, Task> action)
+    {
+        var rowId = GetRowId(app);
+        if (string.Equals(_processingAppId, rowId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _processingAppId = rowId;
+        _message = string.Empty;
+        _isError = false;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var operationId = Guid.NewGuid().ToString("N");
+            LiveOperationLogState.Open(operationId, $"{actionTitle} {GetAppName(app)}");
+            await action(operationId);
+            _message = $"{GetAppName(app)} exposure updated successfully.";
+        }
+        catch (Exception ex)
+        {
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? $"Unable to update exposure for {GetAppName(app)}."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _processingAppId = string.Empty;
+            await LoadAsync();
+        }
+    }
+
+    private bool CanExpose(AppInstance app)
+    {
+        return !string.IsNullOrWhiteSpace(BuildHostnameForApp(app, null));
+    }
+
+    private bool CanUpdate(AppInstance app, ServiceEndpoint? endpoint)
+    {
+        var domain = BuildHostnameForApp(app, endpoint);
+        return !string.IsNullOrWhiteSpace(domain) &&
+               !string.Equals(domain, endpoint?.Hostname, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string GetInitialDomainLabel(AppInstance app)
+    {
+        if (_endpointLookup.TryGetValue(app.ServiceName, out var endpoint) &&
+            TrySplitHostname(endpoint.Hostname, out var label, out _))
+        {
+            return label;
+        }
+
+        return DomainNameBuilder.SanitizeLabel(app.ServiceName);
+    }
+
+    private string GetInitialDomainSuffix(AppInstance app)
+    {
+        if (_endpointLookup.TryGetValue(app.ServiceName, out var endpoint) &&
+            TrySplitHostname(endpoint.Hostname, out _, out var suffix))
+        {
+            return suffix;
+        }
+
+        return _domainSuffixes.FirstOrDefault() ?? string.Empty;
+    }
+
+    private string GetDraftDomainLabel(AppInstance app, ServiceEndpoint? endpoint)
+    {
+        if (_draftDomainLabels.TryGetValue(app.ServiceName, out var draft) &&
+            !string.IsNullOrWhiteSpace(draft))
+        {
+            return draft;
+        }
+
+        if (TrySplitHostname(endpoint?.Hostname, out var label, out _))
+        {
+            return label;
+        }
+
+        return GetInitialDomainLabel(app);
+    }
+
+    private string GetSelectedDomainSuffix(AppInstance app, ServiceEndpoint? endpoint)
+    {
+        if (_selectedDomainSuffixes.TryGetValue(app.ServiceName, out var suffix) &&
+            !string.IsNullOrWhiteSpace(suffix))
+        {
+            return suffix;
+        }
+
+        if (TrySplitHostname(endpoint?.Hostname, out _, out var existingSuffix))
+        {
+            return existingSuffix;
+        }
+
+        return GetInitialDomainSuffix(app);
+    }
+
+    private string BuildHostnameForApp(AppInstance app, ServiceEndpoint? endpoint)
+    {
+        return BuildHostname(GetDraftDomainLabel(app, endpoint), GetSelectedDomainSuffix(app, endpoint));
+    }
+
+    private string BuildHostname(string label, string suffix)
+    {
+        var sanitizedLabel = DomainNameBuilder.SanitizeLabel(label);
+        if (string.IsNullOrWhiteSpace(sanitizedLabel) || string.IsNullOrWhiteSpace(suffix))
+        {
+            return string.Empty;
+        }
+
+        return DomainNameBuilder.Build(sanitizedLabel, suffix);
+    }
+
+    private bool TrySplitHostname(string? hostname, out string label, out string suffix)
+    {
+        label = string.Empty;
+        suffix = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(hostname))
+        {
+            return false;
+        }
+
+        var normalizedHostname = hostname.Trim().ToLowerInvariant();
+        var matchedSuffix = _domainSuffixes
+            .OrderByDescending(value => value.Length)
+            .FirstOrDefault(value => normalizedHostname.EndsWith("." + value, StringComparison.OrdinalIgnoreCase));
+
+        if (string.IsNullOrWhiteSpace(matchedSuffix))
+        {
+            return false;
+        }
+
+        label = normalizedHostname[..^(matchedSuffix.Length + 1)];
+        suffix = matchedSuffix;
+        return !string.IsNullOrWhiteSpace(label);
+    }
+
+    private static string GetRowId(AppInstance app) =>
+        string.IsNullOrWhiteSpace(app.Id) ? app.ServiceName : app.Id;
+
+    private static string GetAppName(AppInstance app) =>
+        string.IsNullOrWhiteSpace(app.DisplayName) ? app.ServiceName : app.DisplayName;
+
+    private static string GetTunnelStatusLabel(bool isReady) => isReady ? "Ready" : "Missing";
+
+    private static string GetTunnelBadgeClass(bool isReady) => isReady ? "running" : "stopped";
+
+    private string GetTunnelDeleteImpactText()
+    {
+        var count = _mappings.Count;
+        return count switch
+        {
+            0 => "No app exposures are currently mapped.",
+            1 => "1 exposed app will be removed.",
+            _ => $"{count} exposed apps will be removed."
+        };
+    }
+
+    private static string GetPortText(AppInstance app, ServiceEndpoint? endpoint)
+    {
+        if (endpoint?.Port is int port)
+        {
+            return port.ToString();
+        }
+
+        return app.Ports.Count == 0 ? "-" : app.Ports[0].ToString();
+    }
+
+    private EndpointMapping? FindMapping(string? serviceName)
+    {
+        var normalizedServiceName = NormalizeServiceName(serviceName);
+        if (string.IsNullOrWhiteSpace(normalizedServiceName) || _mappings.Count == 0)
+        {
+            return null;
+        }
+
+        return _mappings
+            .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ServiceName))
+            .OrderByDescending(mapping => NormalizeServiceName(mapping.ServiceName).Length)
+            .FirstOrDefault(mapping => NamesMatch(normalizedServiceName, NormalizeServiceName(mapping.ServiceName)));
+    }
+
+    private static bool NamesMatch(string left, string right)
+    {
+        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return left.StartsWith(right + "-", StringComparison.OrdinalIgnoreCase) ||
+               left.StartsWith(right + ".", StringComparison.OrdinalIgnoreCase) ||
+               right.StartsWith(left + "-", StringComparison.OrdinalIgnoreCase) ||
+               right.StartsWith(left + ".", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void LogExposureDiagnostics()
+    {
+        foreach (var app in _apps)
+        {
+            var normalizedServiceName = NormalizeServiceName(app.ServiceName);
+            var endpoint = _endpointLookup.TryGetValue(normalizedServiceName, out var existingEndpoint)
+                ? existingEndpoint
+                : null;
+            var mapping = FindMapping(app.ServiceName);
+            var effectiveHostname = string.IsNullOrWhiteSpace(mapping?.Hostname) ? endpoint?.Hostname : mapping!.Hostname;
+            var isExposed = !string.IsNullOrWhiteSpace(effectiveHostname);
+
+            Logger.LogInformation(
+                "Exposure row app={AppName}, service={ServiceName}, normalized={NormalizedServiceName}, endpointService={EndpointService}, endpointHostname={EndpointHostname}, endpointIsExposed={EndpointIsExposed}, mappingService={MappingService}, mappingHostname={MappingHostname}, effectiveHostname={EffectiveHostname}, isExposed={IsExposed}",
+                GetAppName(app),
+                app.ServiceName,
+                normalizedServiceName,
+                endpoint?.ServiceName ?? "-",
+                endpoint?.Hostname ?? "-",
+                endpoint?.IsExposed,
+                mapping?.ServiceName ?? "-",
+                mapping?.Hostname ?? "-",
+                effectiveHostname ?? "-",
+                isExposed);
+        }
+    }
+
+    private static string NormalizeServiceName(string? serviceName)
+    {
+        return (serviceName ?? string.Empty)
+            .Replace(".service", "", StringComparison.OrdinalIgnoreCase)
+            .Trim()
+            .ToLowerInvariant();
+    }
+
+    private static string GetFirstMeaningfulLine(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value
+            .ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault() ?? string.Empty;
+    }
+}
