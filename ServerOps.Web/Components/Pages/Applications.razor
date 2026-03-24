@@ -1,0 +1,329 @@
+@page "/applications"
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using ServerOps.Domain.Entities
+@using ServerOps.Domain.Enums
+@rendermode InteractiveServer
+@inject IAppCatalogService AppCatalogService
+@inject IServiceControlService ServiceControlService
+@inject IAppRemovalService AppRemovalService
+
+<PageTitle>Applications</PageTitle>
+
+<div class="page-container">
+    <div class="page-header">
+        <div>
+            <h1>Applications</h1>
+            <p class="page-description">Installed and running apps on this host.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="message-area @(_isError ? "error" : "success")">
+            @_message
+        </div>
+    }
+
+    <section class="card applications-shell">
+        @if (_isLoading)
+        {
+            <ActivityIndicator Title="Loading applications" Message="Fetching managed application status." />
+        }
+        else if (_apps.Count == 0)
+        {
+            <p class="page-description">No managed applications found.</p>
+        }
+        else
+        {
+            <div class="app-list">
+                @foreach (var app in _apps)
+                {
+                    var rowId = GetRowId(app);
+                    var isProcessing = string.Equals(_processingAppId, rowId, StringComparison.Ordinal);
+                    var isConfirmingRemoval = string.Equals(_confirmingRemovalAppId, rowId, StringComparison.Ordinal);
+
+                    <article class="app-row-card">
+                        <div class="app-row-main">
+                            <div class="app-identity">
+                                <h2 class="app-title">@GetAppName(app)</h2>
+                                <div class="app-meta">@app.ServiceName</div>
+                            </div>
+
+                            <div class="app-runtime">
+                                <div class="app-runtime-item">
+                                    <span class="runtime-label">Status</span>
+                                    <span class="app-badge @GetStatusCssClass(app.Status)">@app.Status</span>
+                                </div>
+                                <div class="app-runtime-item">
+                                    <span class="runtime-label">Port</span>
+                                    <span class="runtime-value">@GetPortText(app)</span>
+                                </div>
+                            </div>
+
+                            <div class="action-group">
+                                @if (app.Status == ServiceStatus.Stopped)
+                                {
+                                    <button type="button"
+                                            class="btn btn-secondary"
+                                            disabled="@isProcessing"
+                                            @onclick="() => ExecuteActionAsync(app, ServiceAction.Start)">
+                                        Start
+                                    </button>
+                                }
+                                else if (app.Status == ServiceStatus.Running)
+                                {
+                                    <button type="button"
+                                            class="btn btn-secondary"
+                                            disabled="@isProcessing"
+                                            @onclick="() => ExecuteActionAsync(app, ServiceAction.Stop)">
+                                        Stop
+                                    </button>
+                                }
+
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        disabled="@isProcessing"
+                                        @onclick="() => ExecuteActionAsync(app, ServiceAction.Restart)">
+                                    Restart
+                                </button>
+
+                                @if (isConfirmingRemoval)
+                                {
+                                    <div class="inline-confirm">
+                                        <span class="inline-confirm-text">Remove?</span>
+                                        <button type="button"
+                                                class="btn btn-danger"
+                                                disabled="@isProcessing"
+                                                @onclick="() => RemoveAppAsync(app)">
+                                            Confirm
+                                        </button>
+                                        <button type="button"
+                                                class="btn btn-secondary"
+                                                disabled="@isProcessing"
+                                                @onclick="CancelRemoval">
+                                            Cancel
+                                        </button>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="btn btn-danger"
+                                            disabled="@isProcessing"
+                                            @onclick="() => BeginRemoval(rowId)">
+                                        Remove
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<AppInstance> _apps = Array.Empty<AppInstance>();
+    private bool _isLoading = true;
+    private string _processingAppId = string.Empty;
+    private string _confirmingRemovalAppId = string.Empty;
+    private string _message = string.Empty;
+    private bool _isError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAppsAsync();
+    }
+
+    private async Task LoadAppsAsync()
+    {
+        _isLoading = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            _apps = await AppCatalogService.GetApplicationsAsync();
+        }
+        catch (Exception ex)
+        {
+            _apps = Array.Empty<AppInstance>();
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to load applications."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ExecuteActionAsync(AppInstance app, ServiceAction action)
+    {
+        var rowId = GetRowId(app);
+        if (string.Equals(_processingAppId, rowId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _processingAppId = rowId;
+        _confirmingRemovalAppId = string.Empty;
+        _message = string.Empty;
+        _isError = false;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var effectiveAction = action == ServiceAction.Restart && app.Status == ServiceStatus.Stopped
+                ? ServiceAction.Start
+                : action;
+
+            var result = action switch
+            {
+                ServiceAction.Start => await ServiceControlService.StartAsync(app.ServiceName),
+                ServiceAction.Stop => await ServiceControlService.StopAsync(app.ServiceName),
+                ServiceAction.Restart when effectiveAction == ServiceAction.Start => await ServiceControlService.StartAsync(app.ServiceName),
+                _ => await ServiceControlService.RestartAsync(app.ServiceName)
+            };
+
+            _message = BuildResultMessage(app, effectiveAction, result);
+            _isError = !result.Succeeded;
+        }
+        catch (Exception ex)
+        {
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? $"Unable to {action.ToString().ToLowerInvariant()} {GetAppName(app)}."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _processingAppId = string.Empty;
+            await InvokeAsync(StateHasChanged);
+            await LoadAppsAsync();
+        }
+    }
+
+    private void BeginRemoval(string rowId)
+    {
+        _confirmingRemovalAppId = rowId;
+        _message = string.Empty;
+        _isError = false;
+    }
+
+    private void CancelRemoval()
+    {
+        _confirmingRemovalAppId = string.Empty;
+    }
+
+    private async Task RemoveAppAsync(AppInstance app)
+    {
+        var rowId = GetRowId(app);
+        if (string.Equals(_processingAppId, rowId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _processingAppId = rowId;
+        _confirmingRemovalAppId = string.Empty;
+        _message = string.Empty;
+        _isError = false;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var result = await AppRemovalService.RemoveAsync(app.ServiceName);
+            _message = BuildRemovalMessage(app, result);
+            _isError = !result.Succeeded;
+        }
+        catch (Exception ex)
+        {
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? $"Unable to remove {GetAppName(app)}."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _processingAppId = string.Empty;
+            await InvokeAsync(StateHasChanged);
+            await LoadAppsAsync();
+        }
+    }
+
+    private static string GetRowId(AppInstance app) =>
+        string.IsNullOrWhiteSpace(app.Id) ? app.ServiceName : app.Id;
+
+    private static string GetAppName(AppInstance app) =>
+        string.IsNullOrWhiteSpace(app.DisplayName) ? app.ServiceName : app.DisplayName;
+
+    private static string GetPortText(AppInstance app) =>
+        app.Ports.Count == 0 ? "-" : app.Ports[0].ToString();
+
+    private static string GetStatusCssClass(ServiceStatus status) =>
+        status switch
+        {
+            ServiceStatus.Running => "running",
+            ServiceStatus.Stopped => "stopped",
+            ServiceStatus.Failed => "failed",
+            _ => "unknown"
+        };
+
+    private static string BuildResultMessage(AppInstance app, ServiceAction action, ServerOps.Application.DTOs.CommandResult result)
+    {
+        var prefix = $"{GetAppName(app)} {GetActionPastTense(action)}";
+        var details = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+
+        if (result.Succeeded)
+        {
+            return $"{prefix} successfully.";
+        }
+
+        var cleanedDetails = GetFirstMeaningfulLine(details);
+        return string.IsNullOrWhiteSpace(cleanedDetails) ? $"{prefix} failed." : $"{prefix} failed. {cleanedDetails}";
+    }
+
+    private static string BuildRemovalMessage(AppInstance app, ServerOps.Application.DTOs.CommandResult result)
+    {
+        if (result.Succeeded)
+        {
+            return $"{GetAppName(app)} removed successfully.";
+        }
+
+        var cleanedDetails = GetFirstMeaningfulLine(string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr);
+        return string.IsNullOrWhiteSpace(cleanedDetails)
+            ? $"{GetAppName(app)} removal failed."
+            : $"{GetAppName(app)} removal failed. {cleanedDetails}";
+    }
+
+    private static string GetActionPastTense(ServiceAction action) =>
+        action switch
+        {
+            ServiceAction.Start => "started",
+            ServiceAction.Stop => "stopped",
+            _ => "restarted"
+        };
+
+    private static string GetFirstMeaningfulLine(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value
+            .ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault(line => !line.StartsWith("SERVICE_NAME", StringComparison.OrdinalIgnoreCase))
+            ?? string.Empty;
+    }
+
+    private enum ServiceAction
+    {
+        Start,
+        Stop,
+        Restart
+    }
+}

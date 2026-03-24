@@ -40,13 +40,33 @@ public sealed class OneClickDeployService : IOneClickDeployService
         var operationId = Guid.NewGuid().ToString("N");
         await _operationLogger.LogAsync(operationId, "OneClick", "Started", ct);
 
-        var hostname = !string.IsNullOrWhiteSpace(request.Hostname)
-            ? request.Hostname.Trim()
-            : request.AutoGenerateHostname
-                ? _domainNameBuilder.Build(request.AppName)
-                : null;
+        string? hostname;
+        if (!string.IsNullOrWhiteSpace(request.Hostname))
+        {
+            hostname = request.Hostname.Trim();
+        }
+        else if (request.AutoGenerateHostname)
+        {
+            if (string.IsNullOrWhiteSpace(request.DomainSuffix))
+            {
+                return CreateFailureResult("Domain suffix is required.");
+            }
 
-        var deployment = await _deploymentService.DeployAsync(request.AppName, request.AssetUrl, ct);
+            try
+            {
+                hostname = _domainNameBuilder.Build(request.AppName, request.DomainSuffix);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                return CreateFailureResult(ex.Message);
+            }
+        }
+        else
+        {
+            hostname = null;
+        }
+
+        var deployment = await _deploymentService.DeployAsync(request.AppName, request.AssetUrl, request.PortOverride, ct);
         await _operationLogger.LogAsync(operationId, "Deployment", deployment.Status.ToString(), ct);
         if (deployment.Status != DeploymentStatus.Succeeded)
         {

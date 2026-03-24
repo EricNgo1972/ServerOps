@@ -39,6 +39,7 @@ public sealed class FileOperationLoggerTests
         public ServerOps.Domain.Enums.OsType GetCurrentOs() => ServerOps.Domain.Enums.OsType.Linux;
         public string GetAppsRootPath() => "/apps";
         public string GetCloudflaredConfigPath() => "/etc/cloudflared/config.yml";
+        public string GetSystemdServiceDirectory() => "/etc/systemd/system";
     }
 
     private sealed class FakeFileSystem : IFileSystem
@@ -49,6 +50,7 @@ public sealed class FileOperationLoggerTests
         public string Combine(params string[] paths) => string.Join("/", paths).Replace("//", "/", StringComparison.Ordinal);
         public string GetTempPath() => "/tmp";
         public bool FileExists(string path) => _files.ContainsKey(path);
+        public void DeleteFile(string path) => _files.Remove(path);
         public bool DirectoryExists(string path) => _directories.Contains(path);
         public void CreateDirectory(string path)
         {

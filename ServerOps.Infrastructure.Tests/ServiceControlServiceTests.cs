@@ -168,5 +168,7 @@ public sealed class ServiceControlServiceTests
         public string GetAppsRootPath() => string.Empty;
 
         public string GetCloudflaredConfigPath() => string.Empty;
+
+        public string GetSystemdServiceDirectory() => string.Empty;
     }
 }

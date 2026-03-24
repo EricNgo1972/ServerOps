@@ -1,14 +1,21 @@
 @inherits LayoutComponentBase
 
-<div class="shell">
+<div class="app-shell">
     <aside class="sidebar">
-        <div class="brand">ServerOps</div>
-        <nav>
+        <div class="sidebar-header">
+            <div class="sidebar-title">ServerOps</div>
+            <div class="sidebar-subtitle">Platform shell</div>
+        </div>
+
+        <nav class="nav-links">
             <NavLink href="/" Match="NavLinkMatch.All">Dashboard</NavLink>
-            <NavLink href="/diagnostics">Diagnostics</NavLink>
-            <NavLink href="/tunnels">Tunnels</NavLink>
+            <NavLink href="/applications">Applications</NavLink>
             <NavLink href="/releases">Releases</NavLink>
-            <NavLink href="/logs/sample">Logs</NavLink>
+            <NavLink href="/deployments">Deployments</NavLink>
+            <NavLink href="/logs">Logs</NavLink>
+            <NavLink href="/exposure">Exposure</NavLink>
+            <NavLink href="/settings">Settings</NavLink>
+            <NavLink href="/about">About</NavLink>
         </nav>
     </aside>
 

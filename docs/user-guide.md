@@ -1,5 +1,12 @@
 # User Guide
 
+ServerOps must run with elevated privileges:
+
+- `Administrator` on Windows
+- `root` on Linux
+
+Without that, deployments that install or manage services will fail.
+
 ## Deploy an application
 
 Open the Releases page and enter the repository, application name, and release asset URL. If you want a public address, provide a hostname or enable automatic hostname generation. Start the one-click deploy action and wait for the result card to update.
@@ -19,6 +26,8 @@ In the Deployment History table, find an earlier successful deployment and selec
 ## Troubleshooting
 
 If the service is not starting, review the deployment message and the operation log for the deployment ID. A failed start usually means the app files are invalid or the service configuration needs attention.
+
+If deployment fails while registering or controlling a service, first confirm that ServerOps itself is running as `Administrator` on Windows or `root` on Linux.
 
 If there is a port conflict, another process is already listening on the required port. Stop the conflicting service or change the app configuration before deploying again.
 

@@ -2,6 +2,13 @@
 
 ServerOps is a `.NET 8` Blazor Server platform for managing deployed applications and their host services across Linux and Windows.
 
+It must run with elevated operating system privileges:
+
+- `Administrator` on Windows
+- `root` on Linux
+
+This is required because ServerOps installs, registers, starts, stops, and updates operating system services, and on Linux it may also create the runtime user for deployed applications.
+
 It provides:
 
 - service discovery and service control
@@ -78,7 +85,9 @@ Environment variables used by infrastructure integrations:
 
 1. Restore and build the solution.
 2. Set required configuration and environment variables.
-3. Run `ServerOps.Web`.
+3. Run `ServerOps.Web` with elevated privileges:
+   - `Administrator` on Windows
+   - `root` on Linux
 4. Open the Blazor UI and use:
    - `/` for dashboard
    - `/diagnostics` for service and topology diagnostics
@@ -122,6 +131,8 @@ Linux bootstrap assets are included at the repository root:
 
 - [`install.sh`](/mnt/c/SPC/spc-setup/install.sh)
 - [`serverops.service`](/mnt/c/SPC/spc-setup/serverops.service)
+
+The Linux systemd service is intended to run ServerOps itself as `root`.
 
 ## Documentation
 

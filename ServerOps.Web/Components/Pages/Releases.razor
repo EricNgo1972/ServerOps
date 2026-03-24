@@ -1,230 +1,456 @@
 @page "/releases"
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@rendermode InteractiveServer
+@inject ICompanyAppRegistry CompanyAppRegistry
+@inject IDomainSuffixRegistry DomainSuffixRegistry
+@inject IEndpointService EndpointService
+@inject IHostService HostService
 @inject IGitHubService GitHubService
 @inject IOneClickDeployService OneClickDeployService
-@inject IDeploymentHistoryStore DeploymentHistoryStore
-@inject IRollbackService RollbackService
-@inject NavigationManager NavigationManager
+@inject IDomainNameBuilder DomainNameBuilder
 
 <PageTitle>Releases</PageTitle>
 
-<h1>GitHub Releases</h1>
+<div class="releases-shell">
+    <header class="page-header">
+        <div>
+            <h1>Releases</h1>
+            <p>Browse GitHub releases and perform one-click deployment.</p>
+        </div>
+    </header>
 
-<EditForm Model="_request" OnValidSubmit="SearchAsync">
-    <div class="form-row">
-        <label for="repo">Repository</label>
-        <InputText id="repo" @bind-Value="_request.Repo" />
-    </div>
-    <div class="form-row">
-        <label for="app">Application Name</label>
-        <InputText id="app" @bind-Value="_request.AppName" />
-    </div>
-    <div class="form-row">
-        <label for="assetUrl">Asset URL</label>
-        <InputText id="assetUrl" @bind-Value="_request.AssetUrl" />
-    </div>
-    <div class="form-row">
-        <label for="hostname">Hostname</label>
-        <InputText id="hostname" @bind-Value="_request.Hostname" disabled="@_request.AutoGenerateHostname" />
-    </div>
-    <div class="form-row">
-        <label for="auto-hostname">Auto-generate hostname</label>
-        <InputCheckbox id="auto-hostname" @bind-Value="_request.AutoGenerateHostname" />
-    </div>
-    <button type="submit">Load Releases</button>
-    <button type="button" @onclick="DeployFromInputAsync">One-Click Deploy</button>
-</EditForm>
+    @if (!string.IsNullOrWhiteSpace(_errorMessage))
+    {
+        <div class="page-status error">
+            <strong>Unable to complete the request.</strong>
+            <span>@_errorMessage</span>
+        </div>
+    }
 
-@if (!string.IsNullOrWhiteSpace(_message))
-{
-    <p class="message">@_message</p>
-}
+    @if (_deployResult is not null)
+    {
+        <div class="page-status @(_deployResult.Exposed ? "success" : "info")">
+            <strong>@_deployResult.Deployment.Status</strong>
+            <span>@(_deployResult.Message ?? "Deployment completed.")</span>
+            @if (!string.IsNullOrWhiteSpace(_deployResult.PublicUrl))
+            {
+                <span>@_deployResult.PublicUrl</span>
+            }
+        </div>
+    }
 
-@if (_releases.Count > 0)
-{
-    <div class="release-list">
-        @foreach (var release in _releases)
+    <section class="releases-toolbar">
+        <label class="field">
+            <span>Application</span>
+            <select value="@_selectedAppName" @onchange="OnSelectedAppChangedAsync" disabled="@_isLoadingReleases">
+                <option value="">Select an application</option>
+                @foreach (var app in _apps)
+                {
+                    <option value="@app.Name">@(string.IsNullOrWhiteSpace(app.DisplayName) ? app.Name : app.DisplayName)</option>
+                }
+            </select>
+        </label>
+
+        @if (_selectedApp is not null)
         {
-            <article class="card">
-                <h2>@(string.IsNullOrWhiteSpace(release.Name) ? release.Tag : release.Name)</h2>
-                <p>Tag: @release.Tag</p>
-                <p>Published: @release.PublishedAt.ToLocalTime()</p>
-
-                @if (release.Assets.Count == 0)
-                {
-                    <p>No assets.</p>
-                }
-                else
-                {
-                    <ul>
-                        @foreach (var asset in release.Assets)
-                        {
-                            <li>
-                                @asset.Name (@asset.Size bytes)
-                                <button @onclick="() => OneClickDeployAsync(asset.DownloadUrl)">One-Click Deploy</button>
-                            </li>
-                        }
-                    </ul>
-                }
-            </article>
+            <div class="selection-banner">
+                <strong>Selected application:</strong>
+                <span>@(string.IsNullOrWhiteSpace(_selectedApp.DisplayName) ? _selectedApp.Name : _selectedApp.DisplayName)</span>
+            </div>
         }
-    </div>
-}
+    </section>
 
-@if (_oneClickResult is not null)
-{
-    <article class="card">
-        <h2>One-Click Deploy Result</h2>
-        <p>Deployment Status: @_oneClickResult.Deployment.Status</p>
-        <p>Deployment Stage: @_oneClickResult.Deployment.Stage</p>
-        <p>Hostname: @(_oneClickResult.Hostname ?? "-")</p>
-        <p>Public URL: @(_oneClickResult.PublicUrl ?? "-")</p>
-        <p>Exposure Status: @(_oneClickResult.Exposed ? "Exposed" : "Not Exposed")</p>
-        @if (_oneClickResult.Deployment.Status == DeploymentStatus.Succeeded && !_oneClickResult.Exposed)
-        {
-            <p class="message">Warning: exposure failed or was not configured.</p>
-        }
-        <p>Message: @(string.IsNullOrWhiteSpace(_oneClickResult.Message) ? "-" : _oneClickResult.Message)</p>
-    </article>
-}
+    <section class="releases-layout">
+        <article class="releases-panel">
+            <div class="panel-heading">
+                <h2>Releases</h2>
+                <span class="subtle">Showing @CurrentOsLabel assets only</span>
+            </div>
 
-@if (_history.Count > 0)
-{
-    <article class="card">
-        <h2>Deployment History</h2>
-        <table class="data-grid">
-            <thead>
-                <tr>
-                    <th>Deployment ID</th>
-                    <th>Version</th>
-                    <th>Status</th>
-                    <th>Stage</th>
-                    <th>Started</th>
-                    <th>Finished</th>
-                    <th>Message</th>
-                    <th>Logs</th>
-                    <th>Rollback</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var item in OrderedHistory)
-                {
-                    <tr class="@(IsLatest(item) ? "latest-deployment" : null)">
-                        <td>@item.DeploymentId</td>
-                        <td>@item.Version</td>
-                        <td>@item.Status</td>
-                        <td>@item.Stage</td>
-                        <td>@item.StartedAtUtc.ToLocalTime()</td>
-                        <td>@(item.FinishedAtUtc?.ToLocalTime().ToString() ?? "-")</td>
-                        <td>@(string.IsNullOrWhiteSpace(item.Message) ? "-" : item.Message)</td>
-                        <td>
-                            <button @onclick="() => OpenLogs(item.DeploymentId)">Logs</button>
-                        </td>
-                        <td>
-                            @if (CanRollback(item))
+            @if (_selectedApp is null)
+            {
+                <p class="empty-text">Select an application to view releases</p>
+            }
+            else if (_isLoadingReleases)
+            {
+                <ActivityIndicator Title="Loading releases" Message="Fetching GitHub releases for the selected application." />
+            }
+            else if (_releases.Count == 0)
+            {
+                <p class="empty-text">No releases found</p>
+            }
+            else
+            {
+                <div class="release-list">
+                    @foreach (var release in _releases)
+                    {
+                        var isSelectedRelease = ReferenceEquals(_selectedRelease, release);
+                        var primaryAsset = release.Assets.FirstOrDefault();
+
+                        <div class="release-item @(isSelectedRelease ? "selected" : string.Empty)">
+                            <button type="button" class="release-button" @onclick="() => SelectRelease(release)">
+                                <span class="release-main">
+                                    <span class="release-date">@FormatReleaseDate(release.PublishedAt)</span>
+                                    <span class="release-name">@release.Name</span>
+                                    <span class="release-meta">@release.Tag</span>
+                                </span>
+                                <span class="release-size">@(primaryAsset is null ? "No assets" : FormatSize(primaryAsset.Size))</span>
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+        </article>
+
+        <aside class="action-panel">
+            <div class="panel-heading">
+                <h2>Deploy</h2>
+            </div>
+
+            <dl class="summary-list">
+                <div>
+                    <dt>Application</dt>
+                    <dd>@(_selectedApp is null ? "-" : string.IsNullOrWhiteSpace(_selectedApp.DisplayName) ? _selectedApp.Name : _selectedApp.DisplayName)</dd>
+                </div>
+                <div>
+                    <dt>Asset</dt>
+                    <dd>@(_selectedAsset?.Name ?? "-")</dd>
+                </div>
+            </dl>
+
+            <label class="field">
+                <span>Port override</span>
+                <input value="@_portOverrideText" @oninput="OnPortOverrideChanged" inputmode="numeric" />
+            </label>
+
+            @if (!IsPortOverrideValid)
+            {
+                <div class="hostname-warning">Enter a port between 1 and 65535.</div>
+            }
+
+            <label class="toggle">
+                <input type="checkbox" @bind="_exposePublicly" />
+                <span>Expose publicly</span>
+            </label>
+
+            @if (_exposePublicly && _selectedApp is not null)
+            {
+                <div class="hostname-editor">
+                    <label class="field">
+                        <span>Host label</span>
+                        <input value="@_hostLabel" @oninput="OnHostLabelChanged" />
+                    </label>
+
+                    <label class="field">
+                        <span>Domain suffix</span>
+                        <select value="@_selectedDomainSuffix" @onchange="OnDomainSuffixChanged">
+                            <option value="">Select a domain suffix</option>
+                            @foreach (var suffix in _domainSuffixes)
                             {
-                                <button @onclick="() => RollbackAsync(item.DeploymentId)">Rollback</button>
+                                <option value="@suffix">@suffix</option>
                             }
-                            else
-                            {
-                                <button disabled>Rollback</button>
-                            }
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
-    </article>
-}
+                        </select>
+                    </label>
+
+                    <div class="hostname-preview">
+                        Hostname: @(SelectedHostname ?? "-")
+                    </div>
+
+                    @if (_domainSuffixes.Count == 0)
+                    {
+                        <div class="hostname-warning">No domain suffixes are available.</div>
+                    }
+                    else if (!IsHostnameValid)
+                    {
+                        <div class="hostname-warning">Enter a valid hostname label and select a domain suffix.</div>
+                    }
+                    else if (IsDuplicateHostname)
+                    {
+                        <div class="hostname-warning">This hostname is already assigned to another app.</div>
+                    }
+                </div>
+            }
+
+            <button type="button"
+                    class="deploy-button"
+                    @onclick="DeployAsync"
+                    disabled="@(!CanDeploy || _isDeploying)">
+                @(_isDeploying ? "Deploying..." : "Deploy")
+            </button>
+
+            @if (_isDeploying)
+            {
+                <div class="deploy-activity">
+                    <ActivityIndicator Title="Deploying" Message="Submitting one-click deployment request." />
+                </div>
+            }
+        </aside>
+    </section>
+</div>
 
 @code {
-    private readonly OneClickDeployRequest _request = new() { AutoGenerateHostname = true };
-    private List<ReleaseInfo> _releases = [];
-    private List<DeploymentHistoryItem> _history = [];
-    private OneClickDeployResult? _oneClickResult;
-    private string _message = string.Empty;
-    private IReadOnlyList<DeploymentHistoryItem> OrderedHistory
-        => _history.OrderByDescending(x => x.StartedAtUtc).ToList();
+    private IReadOnlyList<ServerOps.Application.Models.CompanyApp> _apps = Array.Empty<ServerOps.Application.Models.CompanyApp>();
+    private IReadOnlyList<ReleaseInfo> _releases = Array.Empty<ReleaseInfo>();
+    private ServerOps.Application.Models.CompanyApp? _selectedApp;
+    private ServerOps.Domain.Enums.OsType _currentOs;
+    private string _selectedAppName = string.Empty;
+    private ReleaseInfo? _selectedRelease;
+    private ReleaseAsset? _selectedAsset;
+    private bool _isLoadingReleases;
+    private bool _isDeploying;
+    private bool _exposePublicly;
+    private string _portOverrideText = string.Empty;
+    private IReadOnlyList<string> _domainSuffixes = Array.Empty<string>();
+    private string _selectedDomainSuffix = string.Empty;
+    private string _hostLabel = string.Empty;
+    private HashSet<string> _existingHostnames = new(StringComparer.OrdinalIgnoreCase);
+    private string _errorMessage = string.Empty;
+    private OneClickDeployResult? _deployResult;
 
-    private async Task SearchAsync()
+    protected override async Task OnInitializedAsync()
     {
-        _releases = (await GitHubService.GetReleasesAsync(_request.Repo)).ToList();
-        await LoadHistoryAsync();
-        _message = _releases.Count == 0 ? "No releases found." : string.Empty;
+        _currentOs = HostService.GetCurrentOs();
+        _apps = (await CompanyAppRegistry.GetAppsAsync())
+            .OrderBy(app => app.DisplayName ?? app.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(app => app.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _domainSuffixes = await DomainSuffixRegistry.GetSuffixesAsync();
+        _selectedDomainSuffix = _domainSuffixes.FirstOrDefault() ?? string.Empty;
+        _existingHostnames = (await EndpointService.GetEndpointsAsync())
+            .Where(endpoint => !string.IsNullOrWhiteSpace(endpoint.Hostname))
+            .Select(endpoint => endpoint.Hostname!.Trim().ToLowerInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    private async Task OneClickDeployAsync(string assetUrl)
+    private bool CanDeploy =>
+        _selectedApp is not null &&
+        _selectedAsset is not null &&
+        IsPortOverrideValid &&
+        (!_exposePublicly || (IsHostnameValid && !IsDuplicateHostname));
+
+    private string SanitizedHostLabel => DomainNameBuilder.SanitizeLabel(_hostLabel);
+
+    private bool IsHostnameValid =>
+        !string.IsNullOrWhiteSpace(SanitizedHostLabel) &&
+        !string.IsNullOrWhiteSpace(_selectedDomainSuffix);
+
+    private string? SelectedHostname =>
+        !IsHostnameValid ? null : DomainNameBuilder.Build(_hostLabel, _selectedDomainSuffix);
+
+    private bool IsDuplicateHostname =>
+        !string.IsNullOrWhiteSpace(SelectedHostname) &&
+        _existingHostnames.Contains(SelectedHostname);
+
+    private int? PortOverride =>
+        int.TryParse(_portOverrideText, out var port) && port is >= 1 and <= 65535 ? port : null;
+
+    private bool IsPortOverrideValid =>
+        string.IsNullOrWhiteSpace(_portOverrideText) ||
+        PortOverride.HasValue;
+
+    private string CurrentOsLabel =>
+        _currentOs == ServerOps.Domain.Enums.OsType.Windows ? "Windows" : "Linux";
+
+    private async Task OnSelectedAppChangedAsync(ChangeEventArgs args)
     {
-        if (string.IsNullOrWhiteSpace(_request.AppName))
+        _selectedAppName = args.Value?.ToString() ?? string.Empty;
+        _errorMessage = string.Empty;
+        _deployResult = null;
+        _selectedRelease = null;
+        _selectedAsset = null;
+        _releases = Array.Empty<ReleaseInfo>();
+
+        _selectedApp = _apps.FirstOrDefault(app =>
+            string.Equals(app.Name, _selectedAppName, StringComparison.OrdinalIgnoreCase));
+
+        if (_selectedApp is null)
         {
-            _message = "Application name is required.";
+            _hostLabel = string.Empty;
             return;
         }
 
-        _request.AssetUrl = assetUrl;
-        _oneClickResult = await OneClickDeployService.DeployAsync(_request);
-        await LoadHistoryAsync();
-        _message = _oneClickResult.Message ?? string.Empty;
-    }
+        _hostLabel = DomainNameBuilder.SanitizeLabel(_selectedApp.Name);
 
-    private async Task DeployFromInputAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_request.AssetUrl))
+        var repo = ExtractRepo(_selectedApp.RepoUrl);
+        if (string.IsNullOrWhiteSpace(repo))
         {
-            _message = "Asset URL is required.";
+            _errorMessage = "The selected application does not have a valid GitHub repository.";
             return;
         }
 
-        await OneClickDeployAsync(_request.AssetUrl);
+        _isLoadingReleases = true;
+
+        try
+        {
+            var result = await GitHubService.GetReleasesAsync(repo);
+            if (!result.Succeeded)
+            {
+                _errorMessage = result.ErrorMessage ?? "Unable to load releases from GitHub.";
+                return;
+            }
+
+            _releases = FilterReleasesForCurrentOs(result.Releases, _currentOs);
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = ex.Message;
+        }
+        finally
+        {
+            _isLoadingReleases = false;
+        }
     }
 
-    private async Task RollbackAsync(string deploymentId)
+    private void SelectRelease(ReleaseInfo release)
     {
-        if (string.IsNullOrWhiteSpace(_request.AppName))
+        if (ReferenceEquals(_selectedRelease, release))
         {
-            _message = "Application name is required.";
+            _selectedRelease = null;
+            _selectedAsset = null;
             return;
         }
 
-        var rollbackResult = await RollbackService.RollbackAsync(_request.AppName, deploymentId);
-        _oneClickResult = new OneClickDeployResult
+        _selectedRelease = release;
+        _selectedAsset = release.Assets.FirstOrDefault();
+    }
+
+    private void OnHostLabelChanged(ChangeEventArgs args)
+    {
+        _hostLabel = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnDomainSuffixChanged(ChangeEventArgs args)
+    {
+        _selectedDomainSuffix = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private void OnPortOverrideChanged(ChangeEventArgs args)
+    {
+        _portOverrideText = args.Value?.ToString() ?? string.Empty;
+    }
+
+    private async Task DeployAsync()
+    {
+        if (_selectedApp is null || _selectedAsset is null)
         {
-            Deployment = rollbackResult,
-            Exposed = false,
-            Message = rollbackResult.Message
+            return;
+        }
+
+        var repo = ExtractRepo(_selectedApp.RepoUrl);
+        if (string.IsNullOrWhiteSpace(repo))
+        {
+            _errorMessage = "The selected application does not have a valid GitHub repository.";
+            return;
+        }
+
+        _errorMessage = string.Empty;
+        _deployResult = null;
+        _isDeploying = true;
+
+        try
+        {
+            _deployResult = await OneClickDeployService.DeployAsync(new OneClickDeployRequest
+            {
+                Repo = repo,
+                AppName = _selectedApp.Name,
+                AssetUrl = _selectedAsset.DownloadUrl,
+                PortOverride = PortOverride,
+                AutoGenerateHostname = false,
+                DomainSuffix = _exposePublicly ? _selectedDomainSuffix : null,
+                Hostname = _exposePublicly ? SelectedHostname : null
+            });
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = ex.Message;
+        }
+        finally
+        {
+            _isDeploying = false;
+        }
+    }
+
+    private static string ExtractRepo(string? repoUrl)
+    {
+        if (string.IsNullOrWhiteSpace(repoUrl))
+        {
+            return string.Empty;
+        }
+
+        if (!Uri.TryCreate(repoUrl, UriKind.Absolute, out var uri))
+        {
+            return repoUrl.Trim().Trim('/');
+        }
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2)
+        {
+            return string.Empty;
+        }
+
+        return $"{segments[0]}/{segments[1]}";
+    }
+
+    private static string FormatSize(long size)
+    {
+        if (size >= 1024L * 1024L)
+        {
+            return $"{size / 1024d / 1024d:0.#} MB";
+        }
+
+        if (size >= 1024L)
+        {
+            return $"{size / 1024d:0.#} KB";
+        }
+
+        return $"{size} B";
+    }
+
+    private static string FormatReleaseDate(DateTimeOffset publishedAt)
+    {
+        return publishedAt == DateTimeOffset.MinValue
+            ? "-"
+            : publishedAt.ToLocalTime().ToString("yyyy-MM-dd");
+    }
+
+    private static IReadOnlyList<ReleaseInfo> FilterReleasesForCurrentOs(
+        IReadOnlyList<ReleaseInfo> releases,
+        ServerOps.Domain.Enums.OsType currentOs)
+    {
+        return releases
+            .Select(release =>
+            {
+                var assets = release.Assets
+                    .Where(asset => AssetMatchesOs(asset.Name, currentOs))
+                    .ToList();
+
+                return new ReleaseInfo
+                {
+                    Name = release.Name,
+                    Tag = release.Tag,
+                    PublishedAt = release.PublishedAt,
+                    Assets = assets
+                };
+            })
+            .Where(release => release.Assets.Count > 0)
+            .ToList();
+    }
+
+    private static bool AssetMatchesOs(string assetName, ServerOps.Domain.Enums.OsType currentOs)
+    {
+        if (string.IsNullOrWhiteSpace(assetName))
+        {
+            return false;
+        }
+
+        return currentOs switch
+        {
+            ServerOps.Domain.Enums.OsType.Windows =>
+                assetName.Contains("windows", StringComparison.OrdinalIgnoreCase) ||
+                assetName.Contains("win", StringComparison.OrdinalIgnoreCase),
+            ServerOps.Domain.Enums.OsType.Linux => assetName.Contains("linux", StringComparison.OrdinalIgnoreCase),
+            _ => false
         };
-        await LoadHistoryAsync();
-        _message = rollbackResult.Message ?? string.Empty;
-    }
-
-    private async Task LoadHistoryAsync()
-    {
-        if (string.IsNullOrWhiteSpace(_request.AppName))
-        {
-            _history = [];
-            return;
-        }
-
-        _history = (await DeploymentHistoryStore.GetByAppAsync(_request.AppName)).ToList();
-    }
-
-    private bool IsLatest(DeploymentHistoryItem item)
-        => OrderedHistory.Count > 0 && string.Equals(OrderedHistory[0].DeploymentId, item.DeploymentId, StringComparison.OrdinalIgnoreCase);
-
-    private bool CanRollback(DeploymentHistoryItem item)
-    {
-        return item.Status == DeploymentStatus.Succeeded
-            && !item.IsRollback
-            && !string.IsNullOrWhiteSpace(item.BackupPath)
-            && !IsLatest(item);
-    }
-
-    private void OpenLogs(string deploymentId)
-    {
-        if (string.IsNullOrWhiteSpace(deploymentId))
-        {
-            return;
-        }
-
-        NavigationManager.NavigateTo($"/logs/{deploymentId}");
     }
 }

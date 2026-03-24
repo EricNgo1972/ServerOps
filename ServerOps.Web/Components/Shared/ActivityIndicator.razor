@@ -1,0 +1,18 @@
+<div class="activity-indicator">
+    <div class="activity-spinner" aria-hidden="true"></div>
+    <div class="activity-copy">
+        <div class="activity-title">@Title</div>
+        @if (!string.IsNullOrWhiteSpace(Message))
+        {
+            <div class="activity-text">@Message</div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public string Title { get; set; } = "Loading";
+
+    [Parameter]
+    public string? Message { get; set; }
+}

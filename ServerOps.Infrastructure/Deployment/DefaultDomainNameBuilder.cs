@@ -1,37 +1,33 @@
 using System.Text;
-using Microsoft.Extensions.Options;
 using ServerOps.Application.Abstractions;
-using ServerOps.Infrastructure.Configuration;
 
 namespace ServerOps.Infrastructure.Deployment;
 
 public sealed class DefaultDomainNameBuilder : IDomainNameBuilder
 {
-    private readonly IOptions<DomainOptions> _domainOptions;
-
-    public DefaultDomainNameBuilder(IOptions<DomainOptions> domainOptions)
+    public string Build(string label, string domainSuffix)
     {
-        _domainOptions = domainOptions;
-    }
-
-    public string Build(string appName)
-    {
-        var suffix = _domainOptions.Value.DefaultDomainSuffix?.Trim().ToLowerInvariant() ?? string.Empty;
+        var suffix = domainSuffix?.Trim().ToLowerInvariant() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(suffix))
         {
-            throw new InvalidOperationException("Domain default suffix is required.");
+            throw new InvalidOperationException("Domain suffix is required.");
         }
 
-        var sanitizedAppName = Sanitize(appName);
-        return $"{sanitizedAppName}.{suffix}";
+        var sanitizedLabel = SanitizeLabel(label);
+        if (string.IsNullOrWhiteSpace(sanitizedLabel))
+        {
+            throw new ArgumentException("Hostname label is required.", nameof(label));
+        }
+
+        return $"{sanitizedLabel}.{suffix}";
     }
 
-    private static string Sanitize(string appName)
+    public string SanitizeLabel(string value)
     {
-        var input = (appName ?? string.Empty).Trim().ToLowerInvariant();
+        var input = (value ?? string.Empty).Trim().ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(input))
         {
-            return "app";
+            return string.Empty;
         }
 
         var builder = new StringBuilder(input.Length);
@@ -52,6 +48,6 @@ public sealed class DefaultDomainNameBuilder : IDomainNameBuilder
         }
 
         var sanitized = builder.ToString().Trim('-');
-        return string.IsNullOrWhiteSpace(sanitized) ? "app" : sanitized;
+        return string.IsNullOrWhiteSpace(sanitized) ? string.Empty : sanitized;
     }
 }

@@ -46,6 +46,7 @@ public sealed class DeployApiEndpointTests
             {
                 AppName = "phoebus",
                 AssetUrl = "https://example.com/app.zip",
+                PortOverride = 5200,
                 Hostname = "phoebus.apps.local"
             },
             service,
@@ -56,6 +57,7 @@ public sealed class DeployApiEndpointTests
         Assert.Equal(1, service.Calls);
         Assert.Equal("phoebus", service.Request?.AppName);
         Assert.Equal("phoebus.apps.local", service.Request?.Hostname);
+        Assert.Equal(5200, service.Request?.PortOverride);
     }
 
     private sealed class FakeOneClickDeployService : IOneClickDeployService

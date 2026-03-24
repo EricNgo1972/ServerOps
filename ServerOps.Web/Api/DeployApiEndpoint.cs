@@ -26,7 +26,9 @@ public static class DeployApiEndpoint
         {
             AppName = payload.AppName,
             AssetUrl = payload.AssetUrl,
+            PortOverride = payload.PortOverride,
             Hostname = payload.Hostname,
+            DomainSuffix = payload.DomainSuffix,
             AutoGenerateHostname = string.IsNullOrWhiteSpace(payload.Hostname)
         }, ct);
 

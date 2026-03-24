@@ -7,4 +7,5 @@ public interface IRuntimeEnvironment
     OsType GetCurrentOs();
     string GetAppsRootPath();
     string GetCloudflaredConfigPath();
+    string GetSystemdServiceDirectory();
 }

@@ -1,5 +1,7 @@
 # Deployment Flow
 
+ServerOps itself must run as `Administrator` on Windows or `root` on Linux. The deployment flow depends on elevated privileges to create, update, start, stop, and verify operating system services.
+
 The deployment pipeline runs in this order:
 
 1. Download package

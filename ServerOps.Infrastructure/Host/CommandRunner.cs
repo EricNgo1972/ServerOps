@@ -11,7 +11,10 @@ public sealed class CommandRunner : ICommandRunner
     {
         "systemctl",
         "ss",
-        "cloudflared"
+        "cloudflared",
+        "id",
+        "useradd",
+        "chown"
     };
 
     private static readonly HashSet<string> WindowsCommands = new(StringComparer.OrdinalIgnoreCase)

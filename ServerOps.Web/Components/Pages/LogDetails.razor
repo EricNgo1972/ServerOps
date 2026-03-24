@@ -1,0 +1,23 @@
+@page "/logs/{Id}"
+
+<PageTitle>Log Details</PageTitle>
+
+<div class="page-container">
+    <div class="page-header">
+        <div>
+            <h1>Log Details</h1>
+            <p class="page-description">View log output for a specific operation.</p>
+        </div>
+    </div>
+
+    <section class="card">
+        <h2>Coming next</h2>
+        <p class="page-description">Log detail viewing will be added in the next phase.</p>
+        <p><strong>Operation ID:</strong> @Id</p>
+    </section>
+</div>
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = string.Empty;
+}

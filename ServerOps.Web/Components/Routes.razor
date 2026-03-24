@@ -1,6 +1,17 @@
+@using ServerOps.Web.Components.Shared
+
 <Router AppAssembly="@typeof(Program).Assembly">
     <Found Context="routeData">
         <RouteView RouteData="@routeData" DefaultLayout="@typeof(Layout.MainLayout)" />
         <FocusOnNavigate RouteData="@routeData" Selector="h1" />
     </Found>
+    <Navigating>
+        <LayoutView Layout="@typeof(Layout.MainLayout)">
+            <div class="page-container">
+                <section class="card">
+                    <ActivityIndicator Title="Loading page" Message="Please wait while the next view is prepared." />
+                </section>
+            </div>
+        </LayoutView>
+    </Navigating>
 </Router>

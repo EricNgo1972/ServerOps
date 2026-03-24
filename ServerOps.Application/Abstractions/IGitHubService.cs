@@ -1,8 +1,9 @@
+using ServerOps.Application.DTOs;
 using ServerOps.Domain.Entities;
 
 namespace ServerOps.Application.Abstractions;
 
 public interface IGitHubService
 {
-    Task<IReadOnlyList<ReleaseInfo>> GetReleasesAsync(string repo, CancellationToken cancellationToken = default);
+    Task<GitHubReleaseQueryResult> GetReleasesAsync(string repo, CancellationToken cancellationToken = default);
 }

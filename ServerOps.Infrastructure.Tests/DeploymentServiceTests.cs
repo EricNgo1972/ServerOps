@@ -21,6 +21,8 @@ public sealed class DeploymentServiceTests
             new FakeServiceControlService(
                 startResult: new CommandResult { ExitCode = 0 },
                 stopResult: new CommandResult { ExitCode = 0 }),
+            new FakeServiceRegistrationService(fileSystem),
+            new FakeServicePermissionService(),
             new FakeDeploymentPackageValidator(true),
             new FakeHealthVerificationService(true),
             new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
@@ -39,6 +41,8 @@ public sealed class DeploymentServiceTests
             new FakeFileSystem(),
             new FakeArchiveService(_ => { }),
             control,
+            new FakeServiceRegistrationService(new FakeFileSystem()),
+            new FakeServicePermissionService(),
             new FakeDeploymentPackageValidator(false),
             new FakeHealthVerificationService(true),
             new FakeAppTopologyService([]));
@@ -58,6 +62,8 @@ public sealed class DeploymentServiceTests
             new FakeFileSystem(),
             new FakeArchiveService(_ => { }),
             control,
+            new FakeServiceRegistrationService(new FakeFileSystem(), exists: true),
+            new FakeServicePermissionService(),
             new FakeDeploymentPackageValidator(true),
             new FakeHealthVerificationService(true),
             new FakeAppTopologyService([]));
@@ -88,6 +94,8 @@ public sealed class DeploymentServiceTests
             fileSystem,
             new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
             control,
+            new FakeServiceRegistrationService(fileSystem),
+            new FakeServicePermissionService(),
             new FakeDeploymentPackageValidator(true),
             new FakeHealthVerificationService(true),
             new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
@@ -97,6 +105,7 @@ public sealed class DeploymentServiceTests
         Assert.Equal(DeploymentStatus.RolledBack, result.Status);
         Assert.Equal(DeploymentStage.RolledBack, result.Stage);
         Assert.Equal(2, control.StartCalls);
+        Assert.Equal(2, control.StopCalls);
         Assert.True(fileSystem.DirectoryExists("/apps/phoebus-api/current"));
     }
 
@@ -119,6 +128,8 @@ public sealed class DeploymentServiceTests
             fileSystem,
             new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
             control,
+            new FakeServiceRegistrationService(fileSystem),
+            new FakeServicePermissionService(),
             new FakeDeploymentPackageValidator(true),
             new FakeHealthVerificationService([false, false, false, false, false, false, false, false, false, false, true]),
             new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
@@ -132,12 +143,16 @@ public sealed class DeploymentServiceTests
     [Fact]
     public async Task DeployAsync_First_Deployment_With_No_Current_Folder_Succeeds()
     {
+        var fileSystem = new FakeFileSystem();
+        var registration = new FakeServiceRegistrationService(fileSystem);
         var service = CreateService(
-            new FakeFileSystem(),
+            fileSystem,
             new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
             new FakeServiceControlService(
                 startResult: new CommandResult { ExitCode = 0 },
                 stopResult: new CommandResult { ExitCode = 0 }),
+            registration,
+            new FakeServicePermissionService(),
             new FakeDeploymentPackageValidator(true),
             new FakeHealthVerificationService(true),
             new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
@@ -145,6 +160,7 @@ public sealed class DeploymentServiceTests
         var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
 
         Assert.Equal(DeploymentStatus.Succeeded, result.Status);
+        Assert.Equal(1, registration.RegisterCalls);
     }
 
     [Fact]
@@ -158,6 +174,8 @@ public sealed class DeploymentServiceTests
             new FakeFileSystem(),
             new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
             control,
+            new FakeServiceRegistrationService(new FakeFileSystem()),
+            new FakeServicePermissionService(),
             new FakeDeploymentPackageValidator(true),
             new FakeHealthVerificationService(true),
             new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
@@ -169,19 +187,151 @@ public sealed class DeploymentServiceTests
         Assert.Contains("Rollback failed", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task DeployAsync_Permission_Failure_Returns_Failed_Result()
+    {
+        var fileSystem = new FakeFileSystem();
+        fileSystem.CreateDirectory("/apps/phoebus-api/current");
+        fileSystem.AddFile("/apps/phoebus-api/current/old.dll");
+
+        var service = CreateService(
+            fileSystem,
+            new FakeArchiveService(fs => fs.AddFile("/tmp/serverops/deployment/extracted/app.dll")),
+            new FakeServiceControlService(
+                startResult: new CommandResult { ExitCode = 0 },
+                stopResult: new CommandResult { ExitCode = 0 }),
+            new FakeServiceRegistrationService(fileSystem),
+            new FakeServicePermissionService(new CommandResult { ExitCode = 1, StdErr = "permission failed" }),
+            new FakeDeploymentPackageValidator(true),
+            new FakeHealthVerificationService(true),
+            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5000] }]));
+
+        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip");
+
+        Assert.Equal(DeploymentStatus.RolledBack, result.Status);
+    }
+
+    [Fact]
+    public async Task DeployAsync_Port_Override_Rewrites_Kestrel_Http_Url()
+    {
+        var fileSystem = new FakeFileSystem();
+        var archiveService = new FakeArchiveService(async fs =>
+        {
+            fs.AddFile("app.dll");
+            await fs.WriteAllBytesAsync(
+                fs.Combine(fs.CurrentExtractPath, "appsettings.json"),
+                Encoding.UTF8.GetBytes("""
+                {
+                  "Kestrel": {
+                    "Endpoints": {
+                      "Http": {
+                        "Url": "http://*:5000"
+                      }
+                    }
+                  }
+                }
+                """));
+        });
+        var service = CreateService(
+            fileSystem,
+            archiveService,
+            new FakeServiceControlService(
+                startResult: new CommandResult { ExitCode = 0 },
+                stopResult: new CommandResult { ExitCode = 0 }),
+            new FakeServiceRegistrationService(fileSystem),
+            new FakeServicePermissionService(),
+            new FakeDeploymentPackageValidator(true),
+            new FakeHealthVerificationService(true),
+            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5200] }]));
+
+        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip", 5200);
+
+        Assert.Equal(DeploymentStatus.Succeeded, result.Status);
+        var content = await fileSystem.ReadAllTextAsync("/apps/phoebus-api/current/appsettings.json");
+        Assert.Contains("\"Url\": \"http://*:5200\"", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeployAsync_Port_Override_Adds_Default_Kestrel_When_Missing()
+    {
+        var fileSystem = new FakeFileSystem();
+        var archiveService = new FakeArchiveService(async fs =>
+        {
+            fs.AddFile("app.dll");
+            await fs.WriteAllBytesAsync(
+                fs.Combine(fs.CurrentExtractPath, "appsettings.json"),
+                Encoding.UTF8.GetBytes("""{ "Logging": { "LogLevel": { "Default": "Information" } } }"""));
+        });
+        var service = CreateService(
+            fileSystem,
+            archiveService,
+            new FakeServiceControlService(
+                startResult: new CommandResult { ExitCode = 0 },
+                stopResult: new CommandResult { ExitCode = 0 }),
+            new FakeServiceRegistrationService(fileSystem),
+            new FakeServicePermissionService(),
+            new FakeDeploymentPackageValidator(true),
+            new FakeHealthVerificationService(true),
+            new FakeAppTopologyService([new ServiceTopology { ServiceName = "phoebus-api", Status = ServiceStatus.Running, Ports = [5200] }]));
+
+        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip", 5200);
+
+        Assert.Equal(DeploymentStatus.Succeeded, result.Status);
+        var content = await fileSystem.ReadAllTextAsync("/apps/phoebus-api/current/appsettings.json");
+        Assert.Contains("\"Kestrel\"", content, StringComparison.Ordinal);
+        Assert.Contains("\"Url\": \"http://0.0.0.0:5200\"", content, StringComparison.Ordinal);
+        Assert.Contains("\"MaxRequestBodySize\": 52428800", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeployAsync_Port_Override_Missing_Kestrel_Http_Url_Fails_Before_Stop()
+    {
+        var fileSystem = new FakeFileSystem();
+        var control = new FakeServiceControlService();
+        var archiveService = new FakeArchiveService(async fs =>
+        {
+            fs.AddFile("app.dll");
+            await fs.WriteAllBytesAsync(
+                fs.Combine(fs.CurrentExtractPath, "appsettings.json"),
+                Encoding.UTF8.GetBytes("""{ "Kestrel": { "Endpoints": { "Https": { "Url": "https://*:5001" } } } }"""));
+        });
+        var service = CreateService(
+            fileSystem,
+            archiveService,
+            control,
+            new FakeServiceRegistrationService(fileSystem, exists: true),
+            new FakeServicePermissionService(),
+            new FakeDeploymentPackageValidator(true),
+            new FakeHealthVerificationService(true),
+            new FakeAppTopologyService([]));
+
+        var result = await service.DeployAsync("phoebus-api", "https://example.com/app.zip", 5200);
+
+        Assert.Equal(DeploymentStatus.Failed, result.Status);
+        Assert.Equal(DeploymentStage.ValidatingPackage, result.Stage);
+        Assert.Equal(0, control.StopCalls);
+        Assert.Contains("Kestrel:Endpoints:Http:Url", result.Message, StringComparison.Ordinal);
+    }
+
     private static DeploymentService CreateService(
         FakeFileSystem fileSystem,
         FakeArchiveService archiveService,
         FakeServiceControlService serviceControlService,
+        FakeServiceRegistrationService serviceRegistrationService,
+        FakeServicePermissionService servicePermissionService,
         FakeDeploymentPackageValidator packageValidator,
         FakeHealthVerificationService healthVerificationService,
         FakeAppTopologyService appTopologyService)
     {
+        archiveService.Bind(fileSystem);
+
         return new DeploymentService(
             new FakeHttpClientFactory(),
             fileSystem,
             archiveService,
             serviceControlService,
+            serviceRegistrationService,
+            servicePermissionService,
             new FakeRuntimeEnvironment(),
             packageValidator,
             healthVerificationService,
@@ -212,14 +362,24 @@ public sealed class DeploymentServiceTests
         public ServerOps.Domain.Enums.OsType GetCurrentOs() => ServerOps.Domain.Enums.OsType.Linux;
         public string GetAppsRootPath() => "/apps";
         public string GetCloudflaredConfigPath() => "/etc/cloudflared/config.yml";
+        public string GetSystemdServiceDirectory() => "/etc/systemd/system";
     }
 
     private sealed class FakeArchiveService : IArchiveService
     {
-        private readonly Action<FakeFileSystem> _onExtract;
+        private readonly Func<FakeFileSystem, Task> _onExtract;
         private FakeFileSystem? _fileSystem;
 
         public FakeArchiveService(Action<FakeFileSystem> onExtract)
+            : this(fs =>
+            {
+                onExtract(fs);
+                return Task.CompletedTask;
+            })
+        {
+        }
+
+        public FakeArchiveService(Func<FakeFileSystem, Task> onExtract)
         {
             _onExtract = onExtract;
         }
@@ -229,16 +389,14 @@ public sealed class DeploymentServiceTests
             _fileSystem = fileSystem;
         }
 
-        public Task ExtractZipAsync(string zipPath, string destinationPath, CancellationToken cancellationToken = default)
+        public async Task ExtractZipAsync(string zipPath, string destinationPath, CancellationToken cancellationToken = default)
         {
             _fileSystem?.CreateDirectory(destinationPath);
             _fileSystem?.SetCurrentExtractPath(destinationPath);
             if (_fileSystem is not null)
             {
-                _onExtract(_fileSystem);
+                await _onExtract(_fileSystem);
             }
-
-            return Task.CompletedTask;
         }
     }
 
@@ -286,6 +444,36 @@ public sealed class DeploymentServiceTests
             => Task.FromResult(new CommandResult { ExitCode = 0 });
     }
 
+    private sealed class FakeServiceRegistrationService : IServiceRegistrationService
+    {
+        private readonly FakeFileSystem _fileSystem;
+        private readonly bool? _exists;
+
+        public FakeServiceRegistrationService(FakeFileSystem fileSystem, bool? exists = null)
+        {
+            _fileSystem = fileSystem;
+            _exists = exists;
+        }
+
+        public int ExistsCalls { get; private set; }
+        public int RegisterCalls { get; private set; }
+
+        public Task<bool> ExistsAsync(string serviceName, CancellationToken ct = default)
+        {
+            ExistsCalls++;
+            return Task.FromResult(_exists ?? _fileSystem.DirectoryExists(_fileSystem.Combine("/apps", serviceName, "current")));
+        }
+
+        public Task<CommandResult> RegisterAsync(string serviceName, string deploymentPath, CancellationToken ct = default)
+        {
+            RegisterCalls++;
+            return Task.FromResult(new CommandResult { ExitCode = 0 });
+        }
+
+        public Task<CommandResult> UnregisterAsync(string serviceName, CancellationToken ct = default)
+            => Task.FromResult(new CommandResult { ExitCode = 0 });
+    }
+
     private sealed class FakeDeploymentPackageValidator : IDeploymentPackageValidator
     {
         private readonly bool _isValid;
@@ -297,6 +485,24 @@ public sealed class DeploymentServiceTests
 
         public Task<bool> IsValidAsync(string extractedPath, CancellationToken ct = default)
             => Task.FromResult(_isValid);
+    }
+
+    private sealed class FakeServicePermissionService : IServicePermissionService
+    {
+        private readonly CommandResult _result;
+
+        public FakeServicePermissionService(CommandResult? result = null)
+        {
+            _result = result ?? new CommandResult { ExitCode = 0 };
+        }
+
+        public int Calls { get; private set; }
+
+        public Task<CommandResult> EnsureRuntimePermissionsAsync(string serviceName, string deploymentPath, CancellationToken ct = default)
+        {
+            Calls++;
+            return Task.FromResult(_result);
+        }
     }
 
     private sealed class FakeHealthVerificationService : IHealthVerificationService
@@ -359,9 +565,12 @@ public sealed class DeploymentServiceTests
         private readonly Dictionary<string, byte[]> _files = new(StringComparer.OrdinalIgnoreCase);
         private string _currentExtractPath = string.Empty;
 
+        public string CurrentExtractPath => _currentExtractPath;
+
         public string Combine(params string[] paths) => string.Join("/", paths).Replace("//", "/", StringComparison.Ordinal);
         public string GetTempPath() => "/tmp";
         public bool FileExists(string path) => _files.ContainsKey(path);
+        public void DeleteFile(string path) => _files.Remove(path);
         public bool DirectoryExists(string path) => _directories.Contains(path);
         public void CreateDirectory(string path)
         {
@@ -446,6 +655,10 @@ public sealed class DeploymentServiceTests
         public void AddFile(string path)
         {
             var normalizedPath = path.Replace('\\', '/');
+            if (!normalizedPath.StartsWith("/", StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(_currentExtractPath))
+            {
+                normalizedPath = Combine(_currentExtractPath, normalizedPath);
+            }
             EnsureParents(Path.GetDirectoryName(normalizedPath)?.Replace('\\', '/') ?? "/");
             _files[normalizedPath] = Encoding.UTF8.GetBytes("content");
         }
@@ -478,6 +691,11 @@ public sealed class DeploymentServiceTests
 
         private static bool MatchesPattern(string fileName, string searchPattern)
         {
+            if (string.Equals(searchPattern, "appsettings.json", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Equals(fileName, "appsettings.json", StringComparison.OrdinalIgnoreCase);
+            }
+
             if (searchPattern == "*.dll")
             {
                 return fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);

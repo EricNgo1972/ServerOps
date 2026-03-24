@@ -3,6 +3,7 @@ Description=ServerOps Web
 After=network.target
 
 [Service]
+User=root
 WorkingDirectory=/opt/serverops
 ExecStart=/usr/bin/dotnet /opt/serverops/ServerOps.Web.dll
 Restart=always

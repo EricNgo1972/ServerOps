@@ -10,6 +10,14 @@ public sealed class FileSystem : IFileSystem
 
     public bool FileExists(string path) => File.Exists(path);
 
+    public void DeleteFile(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
     public bool DirectoryExists(string path) => Directory.Exists(path);
 
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);

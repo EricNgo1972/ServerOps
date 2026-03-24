@@ -6,8 +6,6 @@ namespace ServerOps.Infrastructure.Deployment;
 
 public sealed class HealthVerificationService : IHealthVerificationService
 {
-    private readonly HttpClient _httpClient;
-    private readonly IAppCatalogService _appCatalogService;
     private readonly IAppTopologyService _appTopologyService;
 
     public HealthVerificationService(
@@ -15,8 +13,6 @@ public sealed class HealthVerificationService : IHealthVerificationService
         IAppCatalogService appCatalogService,
         IAppTopologyService appTopologyService)
     {
-        _httpClient = httpClientFactory.CreateClient();
-        _appCatalogService = appCatalogService;
         _appTopologyService = appTopologyService;
     }
 
@@ -25,20 +21,6 @@ public sealed class HealthVerificationService : IHealthVerificationService
         if (string.IsNullOrWhiteSpace(appName))
         {
             return false;
-        }
-
-        var app = await _appCatalogService.GetApplicationAsync(appName, ct);
-        if (!string.IsNullOrWhiteSpace(app?.App.HealthUrl))
-        {
-            try
-            {
-                using var response = await _httpClient.GetAsync(app.App.HealthUrl, ct);
-                return response.IsSuccessStatusCode;
-            }
-            catch
-            {
-                return false;
-            }
         }
 
         var topology = await _appTopologyService.GetTopologyAsync(ct);

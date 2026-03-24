@@ -1,48 +1,299 @@
 @page "/"
-@page "/dashboard"
+@inject IHostService HostService
 @inject IAppCatalogService AppCatalogService
+@inject IConnectivityService ConnectivityService
+@inject IDeploymentHistoryStore DeploymentHistoryStore
 
 <PageTitle>Dashboard</PageTitle>
 
-<h1>Services</h1>
-
-@if (_apps.Count == 0)
+@if (_isLoading)
 {
-    <p>No services discovered.</p>
+    <p>Loading...</p>
 }
-else
+else if (!string.IsNullOrWhiteSpace(_errorMessage))
 {
-    <table class="data-grid">
-        <thead>
-            <tr>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Ports</th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var app in _apps)
-            {
-                <tr>
-                    <td><a href="/app/@app.ServiceName">@app.DisplayName</a></td>
-                    <td><span class="status @app.Status.ToString().ToLowerInvariant()">@app.Status</span></td>
-                    <td>@(app.Ports.Count == 0 ? "-" : string.Join(", ", app.Ports))</td>
-                </tr>
-            }
-        </tbody>
-    </table>
+    <div class="dashboard-shell">
+        <div class="dashboard-status error">
+            <strong>Unable to load dashboard.</strong>
+            <span>@_errorMessage</span>
+        </div>
+    </div>
+}
+else if (_model is not null)
+{
+    <div class="dashboard-shell">
+        <header class="dashboard-header">
+            <h1>Dashboard</h1>
+            <p>Overall host status and quick summary.</p>
+        </header>
+
+        <section class="dashboard-grid">
+            <article class="overview-card">
+                <div class="card-label">Applications</div>
+                <div class="metric-grid">
+                    <div>
+                        <span class="metric-value">@_model.TotalApps</span>
+                        <span class="metric-text">Total</span>
+                    </div>
+                    <div>
+                        <span class="metric-value">@_model.RunningApps</span>
+                        <span class="metric-text">Running</span>
+                    </div>
+                    <div>
+                        <span class="metric-value">@_model.StoppedApps</span>
+                        <span class="metric-text">Stopped</span>
+                    </div>
+                    <div class="@(_model.FailedApps > 0 ? "metric-alert" : string.Empty)">
+                        <span class="metric-value">@_model.FailedApps</span>
+                        <span class="metric-text">Failed</span>
+                    </div>
+                </div>
+            </article>
+
+            <article class="overview-card">
+                <div class="card-label">Deployments</div>
+                <div class="metric-grid">
+                    <div>
+                        <span class="metric-value">@_model.TotalDeployments</span>
+                        <span class="metric-text">Total</span>
+                    </div>
+                    <div class="@(_model.FailedDeploymentsLast24Hours > 0 ? "metric-alert" : string.Empty)">
+                        <span class="metric-value">@_model.FailedDeploymentsLast24Hours</span>
+                        <span class="metric-text">Failed in 24h</span>
+                    </div>
+                </div>
+            </article>
+
+            <article class="overview-card wide">
+                <div class="card-label">Infrastructure</div>
+                <dl class="status-list">
+                    <div>
+                        <dt>cloudflared</dt>
+                        <dd><span class="badge @GetBadgeClass(_model.CloudflaredStatus)">@_model.CloudflaredStatus</span></dd>
+                    </div>
+                    <div>
+                        <dt>SQL Server</dt>
+                        <dd><span class="badge @GetBadgeClass(_model.SqlServerStatus)">@_model.SqlServerStatus</span></dd>
+                    </div>
+                    <div>
+                        <dt>PostgreSQL</dt>
+                        <dd><span class="badge @GetBadgeClass(_model.PostgreSqlStatus)">@_model.PostgreSqlStatus</span></dd>
+                    </div>
+                    <div>
+                        <dt>SSH server</dt>
+                        <dd><span class="badge @GetBadgeClass(_model.SshServerStatus)">@_model.SshServerStatus</span></dd>
+                    </div>
+                </dl>
+            </article>
+
+            <article class="overview-card wide">
+                <div class="card-label">Connectivity</div>
+                <dl class="status-list compact">
+                    <div>
+                        <dt>Internet</dt>
+                        <dd><span class="badge @GetBadgeClass(_model.InternetConnectivityStatus)">@_model.InternetConnectivityStatus</span></dd>
+                    </div>
+                </dl>
+
+                @if (_model.Interfaces.Count == 0)
+                {
+                    <p class="empty-text">No operational network interfaces found.</p>
+                }
+                else
+                {
+                    <div class="interface-list compact">
+                        @foreach (var networkInterface in _model.Interfaces)
+                        {
+                            <div class="interface-item">
+                                <div class="interface-header compact">
+                                    <strong>@networkInterface.Name</strong>
+                                    <span class="metric-inline">@FormatAddresses(networkInterface)</span>
+                                    <span class="badge @GetBadgeClass(networkInterface.Status)">@networkInterface.Status</span>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </article>
+
+            <article class="overview-card wide">
+                <div class="card-label">Host</div>
+                <div class="host-value">@_model.Os</div>
+            </article>
+
+            <article class="overview-card wide">
+                <div class="card-label">System</div>
+                <div class="system-row">
+                    <span class="metric-text">Last updated</span>
+                    <strong>@_model.LastUpdatedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz")</strong>
+                </div>
+            </article>
+        </section>
+    </div>
 }
 
 @code {
-    private List<AppInstance> _apps = [];
+    private DashboardViewModel? _model;
+    private bool _isLoading = true;
+    private string _errorMessage = string.Empty;
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadAsync();
+        try
+        {
+            var lastUpdatedUtc = DateTimeOffset.UtcNow;
+            var appsTask = AppCatalogService.GetApplicationsAsync();
+            var servicesTask = HostService.GetServicesAsync();
+            var connectivityTask = ConnectivityService.GetSnapshotAsync();
+
+            await Task.WhenAll(appsTask, servicesTask, connectivityTask);
+
+            var apps = appsTask.Result;
+            var services = servicesTask.Result;
+            var connectivity = connectivityTask.Result;
+
+            var deploymentTasks = apps
+                .Select(app => DeploymentHistoryStore.GetByAppAsync(app.ServiceName))
+                .ToArray();
+
+            await Task.WhenAll(deploymentTasks);
+
+            var deployments = deploymentTasks
+                .SelectMany(task => task.Result)
+                .ToList();
+
+            _model = new DashboardViewModel
+            {
+                Os = HostService.GetCurrentOs().ToString(),
+                TotalApps = apps.Count,
+                RunningApps = apps.Count(app => app.Status == ServiceStatus.Running),
+                StoppedApps = apps.Count(app => app.Status == ServiceStatus.Stopped),
+                FailedApps = apps.Count(app => app.Status == ServiceStatus.Failed),
+                TotalDeployments = deployments.Count,
+                FailedDeploymentsLast24Hours = deployments.Count(item =>
+                    item.Status == DeploymentStatus.Failed &&
+                    item.StartedAtUtc >= lastUpdatedUtc.AddHours(-24)),
+                CloudflaredStatus = GetServiceHealthLabel(FindService(services, "cloudflared")),
+                SqlServerStatus = GetServiceHealthLabel(FindService(services, "mssql-server", "mssqlserver", "sqlserver")),
+                PostgreSqlStatus = GetServiceHealthLabel(FindService(services, "postgresql", "postgres")),
+                SshServerStatus = GetServiceHealthLabel(FindService(services, "sshd", "ssh")),
+                InternetConnectivityStatus = connectivity.InternetStatus,
+                Interfaces = connectivity.Interfaces,
+                LastUpdatedUtc = lastUpdatedUtc
+            };
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = ex.Message;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
     }
 
-    private async Task LoadAsync()
+    private static ServiceInfo? FindService(IReadOnlyList<ServiceInfo> services, params string[] aliases)
     {
-        _apps = (await AppCatalogService.GetApplicationsAsync()).ToList();
+        foreach (var service in services)
+        {
+            var normalizedName = Normalize(service.Name);
+            if (aliases.Any(alias => IsAliasMatch(normalizedName, Normalize(alias))))
+            {
+                return service;
+            }
+        }
+
+        return null;
+    }
+
+    private static string Normalize(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized.EndsWith(".service", StringComparison.Ordinal)
+            ? normalized[..^".service".Length]
+            : normalized;
+    }
+
+    private static bool IsAliasMatch(string serviceName, string alias)
+    {
+        if (string.IsNullOrWhiteSpace(serviceName) || string.IsNullOrWhiteSpace(alias))
+        {
+            return false;
+        }
+
+        return string.Equals(serviceName, alias, StringComparison.Ordinal) ||
+               serviceName.StartsWith($"{alias}-", StringComparison.Ordinal) ||
+               serviceName.StartsWith($"{alias}.", StringComparison.Ordinal);
+    }
+
+    private static string GetServiceHealthLabel(ServiceInfo? service)
+    {
+        if (service is null)
+        {
+            return "Not found";
+        }
+
+        return service.Status switch
+        {
+            ServiceStatus.Running => "Running",
+            ServiceStatus.Stopped => "Stopped",
+            ServiceStatus.Failed => "Failed",
+            _ => "Unknown"
+        };
+    }
+
+    private static string GetBadgeClass(string status)
+    {
+        return status switch
+        {
+            "Running" => "ok",
+            "Connected" => "ok",
+            "Configured" => "ok",
+            "Stopped" => "warn",
+            "Failed" => "warn",
+            "Unavailable" => "warn",
+            "Up" => "ok",
+            _ => "neutral"
+        };
+    }
+
+    private static string FormatAddresses(NetworkInterfaceInfo networkInterface)
+    {
+        var parts = new List<string>();
+
+        if (networkInterface.IPv4Addresses.Count > 0)
+        {
+            parts.Add($"IPv4: {string.Join(", ", networkInterface.IPv4Addresses)}");
+        }
+
+        if (networkInterface.IPv6Addresses.Count > 0)
+        {
+            parts.Add($"IPv6: {string.Join(", ", networkInterface.IPv6Addresses)}");
+        }
+
+        return parts.Count == 0 ? "-" : string.Join(" | ", parts);
+    }
+
+    private sealed class DashboardViewModel
+    {
+        public string Os { get; init; } = string.Empty;
+        public int TotalApps { get; init; }
+        public int RunningApps { get; init; }
+        public int StoppedApps { get; init; }
+        public int FailedApps { get; init; }
+        public int TotalDeployments { get; init; }
+        public int FailedDeploymentsLast24Hours { get; init; }
+        public string CloudflaredStatus { get; init; } = "Unknown";
+        public string SqlServerStatus { get; init; } = "Unknown";
+        public string PostgreSqlStatus { get; init; } = "Unknown";
+        public string SshServerStatus { get; init; } = "Unknown";
+        public string InternetConnectivityStatus { get; init; } = "Unknown";
+        public IReadOnlyList<NetworkInterfaceInfo> Interfaces { get; init; } = Array.Empty<NetworkInterfaceInfo>();
+        public DateTimeOffset LastUpdatedUtc { get; init; }
     }
 }

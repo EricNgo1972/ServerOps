@@ -35,4 +35,6 @@ public sealed class RuntimeEnvironment : IRuntimeEnvironment
         var options = _pathsOptions.Value;
         return GetCurrentOs() == OsType.Windows ? options.WindowsCloudflaredConfigPath : "/etc/cloudflared/config.yml";
     }
+
+    public string GetSystemdServiceDirectory() => "/etc/systemd/system";
 }

@@ -94,6 +94,7 @@ ingress:
         public string Combine(params string[] paths) => string.Join("/", paths);
         public string GetTempPath() => "/tmp";
         public bool FileExists(string path) => true;
+        public void DeleteFile(string path) { }
         public bool DirectoryExists(string path) => false;
         public void CreateDirectory(string path) { }
         public void DeleteDirectory(string path, bool recursive) { }

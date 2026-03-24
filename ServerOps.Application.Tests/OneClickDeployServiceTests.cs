@@ -28,6 +28,7 @@ public sealed class OneClickDeployServiceTests
         {
             AppName = "phoebus",
             AssetUrl = "https://example.com/app.zip",
+            DomainSuffix = "apps.local",
             AutoGenerateHostname = true
         });
 
@@ -112,11 +113,32 @@ public sealed class OneClickDeployServiceTests
         {
             AppName = "phoebus",
             AssetUrl = "https://example.com/app.zip",
+            DomainSuffix = "apps.local",
             AutoGenerateHostname = true
         });
 
         Assert.Equal("phoebus.apps.local", result.Hostname);
         Assert.Equal("phoebus.apps.local", exposure.Hostname);
+    }
+
+    [Fact]
+    public async Task DeployAsync_Passes_Port_Override_To_Deployment()
+    {
+        var deployment = new FakeDeploymentService(SucceededDeployment());
+        var service = new OneClickDeployService(
+            deployment,
+            new FakeExposureService(),
+            new FakeDomainNameBuilder("phoebus.apps.local"),
+            new FakeOperationLogger());
+
+        await service.DeployAsync(new OneClickDeployRequest
+        {
+            AppName = "phoebus",
+            AssetUrl = "https://example.com/app.zip",
+            PortOverride = 5200
+        });
+
+        Assert.Equal(5200, deployment.PortOverride);
     }
 
     private static DeploymentResult SucceededDeployment()
@@ -140,8 +162,13 @@ public sealed class OneClickDeployServiceTests
             _result = result;
         }
 
-        public Task<DeploymentResult> DeployAsync(string appName, string assetUrl, CancellationToken cancellationToken = default)
-            => Task.FromResult(_result);
+        public int? PortOverride { get; private set; }
+
+        public Task<DeploymentResult> DeployAsync(string appName, string assetUrl, int? portOverride = null, CancellationToken cancellationToken = default)
+        {
+            PortOverride = portOverride;
+            return Task.FromResult(_result);
+        }
     }
 
     private sealed class FakeExposureService : IExposureService
@@ -185,7 +212,9 @@ public sealed class OneClickDeployServiceTests
             _hostname = hostname;
         }
 
-        public string Build(string appName) => _hostname;
+        public string Build(string label, string domainSuffix) => _hostname;
+
+        public string SanitizeLabel(string value) => value;
     }
 
     private sealed class FakeOperationLogger : IOperationLogger

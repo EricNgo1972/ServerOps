@@ -1,0 +1,234 @@
+@page "/deployments"
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using ServerOps.Application.Models
+@using ServerOps.Domain.Enums
+@rendermode InteractiveServer
+@inject ICompanyAppRegistry CompanyAppRegistry
+@inject IDeploymentHistoryStore DeploymentHistoryStore
+@inject IRollbackService RollbackService
+
+<PageTitle>Deployments</PageTitle>
+
+<div class="page-container">
+    <div class="page-header">
+        <div>
+            <h1>Deployments</h1>
+            <p class="page-description">Deployment history, rollback, and related actions.</p>
+        </div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="message-area @(_isError ? "error" : "success")">
+            @_message
+        </div>
+    }
+
+    <section class="card deployments-shell">
+        <div class="deployments-filter">
+            <label class="field">
+                <span>Application</span>
+                <select value="@_selectedAppName" @onchange="OnSelectedAppChangedAsync" disabled="@_isLoading">
+                    <option value="">Select an application</option>
+                    @foreach (var app in _apps)
+                    {
+                        <option value="@app.Name">@(string.IsNullOrWhiteSpace(app.DisplayName) ? app.Name : app.DisplayName)</option>
+                    }
+                </select>
+            </label>
+        </div>
+
+        @if (_isLoading)
+        {
+            <ActivityIndicator Title="Loading deployments" Message="Fetching deployment history for the selected application." />
+        }
+        else if (string.IsNullOrWhiteSpace(_selectedAppName))
+        {
+            <p class="page-description">Select an application to view deployment history.</p>
+        }
+        else if (_deployments.Count == 0)
+        {
+            <p class="page-description">No deployments found.</p>
+        }
+        else
+        {
+            <div class="deployments-list">
+                <div class="deployments-grid deployments-grid-header">
+                    <div>App</div>
+                    <div>Version</div>
+                    <div>Status</div>
+                    <div>Time</div>
+                    <div>Actions</div>
+                </div>
+
+                @foreach (var deployment in _deployments)
+                {
+                    var isProcessing = string.Equals(_processingDeploymentId, deployment.DeploymentId, StringComparison.Ordinal);
+
+                    <div class="deployments-grid deployments-row">
+                        <div class="deployment-app">@deployment.AppName</div>
+                        <div class="deployment-version">@FormatVersion(deployment)</div>
+                        <div>
+                            <span class="deployment-badge @GetStatusCssClass(deployment.Status)">
+                                @deployment.Status
+                            </span>
+                        </div>
+                        <div class="deployment-time">@FormatTime(deployment.StartedAtUtc)</div>
+                        <div class="deployment-actions">
+                            @if (deployment.Status == DeploymentStatus.Succeeded)
+                            {
+                                <button type="button"
+                                        class="rollback-button"
+                                        disabled="@isProcessing"
+                                        @onclick="() => RollbackAsync(deployment)">
+                                    Rollback
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<CompanyApp> _apps = Array.Empty<CompanyApp>();
+    private IReadOnlyList<ServerOps.Application.DTOs.DeploymentHistoryItem> _deployments = Array.Empty<ServerOps.Application.DTOs.DeploymentHistoryItem>();
+    private string _selectedAppName = string.Empty;
+    private string _processingDeploymentId = string.Empty;
+    private bool _isLoading = true;
+    private string _message = string.Empty;
+    private bool _isError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAppsAsync();
+    }
+
+    private async Task LoadAppsAsync()
+    {
+        _isLoading = true;
+
+        try
+        {
+            _apps = (await CompanyAppRegistry.GetAppsAsync())
+                .OrderBy(app => app.DisplayName ?? app.Name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(app => app.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _apps = Array.Empty<CompanyApp>();
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to load applications."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isLoading = false;
+        }
+    }
+
+    private async Task OnSelectedAppChangedAsync(ChangeEventArgs args)
+    {
+        _selectedAppName = args.Value?.ToString() ?? string.Empty;
+        _message = string.Empty;
+        _isError = false;
+        _deployments = Array.Empty<ServerOps.Application.DTOs.DeploymentHistoryItem>();
+
+        if (string.IsNullOrWhiteSpace(_selectedAppName))
+        {
+            return;
+        }
+
+        _isLoading = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            _deployments = (await DeploymentHistoryStore.GetByAppAsync(_selectedAppName))
+                .OrderByDescending(item => item.StartedAtUtc)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _deployments = Array.Empty<ServerOps.Application.DTOs.DeploymentHistoryItem>();
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to load deployment history."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task RollbackAsync(ServerOps.Application.DTOs.DeploymentHistoryItem deployment)
+    {
+        if (string.IsNullOrWhiteSpace(_selectedAppName) ||
+            string.Equals(_processingDeploymentId, deployment.DeploymentId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _processingDeploymentId = deployment.DeploymentId;
+        _message = string.Empty;
+        _isError = false;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var result = await RollbackService.RollbackAsync(deployment.AppName, deployment.DeploymentId);
+            _message = string.IsNullOrWhiteSpace(result.Message)
+                ? "Rollback completed."
+                : result.Message;
+            _isError = result.Status != DeploymentStatus.RolledBack && result.Status != DeploymentStatus.Succeeded;
+        }
+        catch (Exception ex)
+        {
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Rollback failed."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _processingDeploymentId = string.Empty;
+            await OnSelectedAppChangedAsync(new ChangeEventArgs { Value = _selectedAppName });
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string GetStatusCssClass(DeploymentStatus status) =>
+        status switch
+        {
+            DeploymentStatus.Succeeded => "success",
+            DeploymentStatus.Failed => "failed",
+            _ => "neutral"
+        };
+
+    private static string FormatTime(DateTimeOffset value) =>
+        value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
+    private static string FormatVersion(ServerOps.Application.DTOs.DeploymentHistoryItem deployment)
+    {
+        if (string.IsNullOrWhiteSpace(deployment.Version))
+        {
+            return "-";
+        }
+
+        var version = deployment.Version.Trim();
+        var appName = deployment.AppName?.Trim();
+        if (!string.IsNullOrWhiteSpace(appName) &&
+            version.StartsWith($"{appName}-", StringComparison.OrdinalIgnoreCase))
+        {
+            return version[(appName.Length + 1)..];
+        }
+
+        return version;
+    }
+}

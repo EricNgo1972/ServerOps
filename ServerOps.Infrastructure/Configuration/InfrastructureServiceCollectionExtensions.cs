@@ -19,9 +19,9 @@ public static class InfrastructureServiceCollectionExtensions
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<CloudflareOptions>(configuration.GetSection("Cloudflare"));
-        services.Configure<DomainOptions>(configuration.GetSection("Domain"));
         services.Configure<GitHubOptions>(configuration.GetSection("GitHub"));
         services.Configure<PathsOptions>(configuration.GetSection("Paths"));
+        services.Configure<ServiceRegistrationOptions>(configuration.GetSection("ServiceRegistration"));
 
         services.AddMemoryCache();
         services.AddSingleton<ICommandRunner, CommandRunner>();
@@ -36,7 +36,10 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddSingleton<IHostService, HostService>();
         services.AddSingleton<IServiceControlService, ServiceControlService>();
+        services.AddSingleton<IServiceRegistrationService, ServiceRegistrationService>();
+        services.AddSingleton<IServicePermissionService, ServicePermissionService>();
         services.AddSingleton<IPortService, PortService>();
+        services.AddSingleton<IConnectivityService, ConnectivityService>();
         services.AddSingleton<ICloudflaredService, CloudflaredService>();
         services.AddSingleton<ICloudflaredConfigService, CloudflaredConfigService>();
         services.AddSingleton<IOperationLogger, FileOperationLogger>();
@@ -47,6 +50,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDeploymentService, DeploymentService>();
         services.AddSingleton<IRollbackService, RollbackService>();
         services.AddSingleton<AzureTableAppRegistry>();
+        services.AddSingleton<IDomainSuffixRegistry, AzureTableDomainSuffixRegistry>();
         services.AddSingleton<ICompanyAppRegistry, CachedCompanyAppRegistry>();
         services.AddSingleton<IManagedAppFilter, ManagedAppFilter>();
         services.AddSingleton<IAppTopologyService, AppTopologyService>();
@@ -56,17 +60,24 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IDomainNameBuilder, DefaultDomainNameBuilder>();
         services.AddSingleton<IOneClickDeployService, OneClickDeployService>();
         services.AddSingleton<IAppCatalogService, AppCatalogService>();
+        services.AddSingleton<IAppRemovalService, AppRemovalService>();
         services.AddHttpClient<ICloudflareDnsService, CloudflareDnsService>();
 
         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
         {
             var options = serviceProvider.GetRequiredService<IOptions<GitHubOptions>>().Value;
+            var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                token = options.Token;
+            }
+
             client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ServerOps", "1.0"));
             client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
-            if (!string.IsNullOrWhiteSpace(options.Token))
+            if (!string.IsNullOrWhiteSpace(token))
             {
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", options.Token);
+                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             }
         });
 

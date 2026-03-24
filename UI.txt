@@ -1,0 +1,106 @@
+# ServerOps Context Pack
+
+I am building a .NET 8 Blazor Server application called **ServerOps**.
+
+## Purpose
+
+ServerOps is a lightweight DevOps platform to manage applications on a single host (Linux or Windows).
+
+It can:
+
+* Discover and control services (start/stop/restart)
+* Deploy apps from GitHub releases
+* Manage Cloudflare tunnels and domains
+* Perform one-click deployment (deploy + expose)
+* Track deployment history and support rollback
+* Store logs per deployment
+
+---
+
+## Architecture
+
+Clean layered architecture:
+
+* **Domain**: entities, enums (AppInstance, DeploymentRecord, etc.)
+* **Application**: abstractions + orchestration services
+* **Infrastructure**: implementations (host, deployment, cloudflare, storage)
+* **Web**: Blazor Server UI (no heavy UI frameworks)
+
+No external dependencies unless absolutely necessary.
+
+---
+
+## Completed Backend Modules
+
+* Module 1–4: Host service + service control (Linux/Windows)
+* Module 5–7: App topology and filtering (company apps only)
+* Module 8: Cloudflare tunnel + DNS automation
+* Module 9: Deployment pipeline (download → extract → swap → start → verify)
+* Module 10: Deployment history + rollback (JSON-based, safe)
+* Module 11: One-click deploy (GitHub → Deploy → Domain → Tunnel)
+
+---
+
+## Key Concepts
+
+* **App** = a managed service deployed on the host
+* **Deployment** = one version install attempt
+* **OperationId** = deploymentId used for logs
+* **Exposure** = mapping app → domain via Cloudflare tunnel
+
+---
+
+## UI Plan (Locked)
+
+Pages:
+
+1. Dashboard → overall host status
+2. Applications → running apps + control
+3. Releases → GitHub + one-click deploy
+4. Deployments → history + rollback
+5. Logs → operation logs
+6. Exposure → domain + tunnel mapping
+7. Settings → configuration
+8. About → help / documentation
+
+Navigation order is fixed and should not change.
+
+---
+
+## UI Constraints
+
+* Blazor Server only
+* No Bootstrap / Tailwind / component libraries
+* Minimal, clean UI (Claude-style later)
+* Build page-by-page, not all at once
+
+---
+
+## Current Phase
+
+UI implementation.
+
+We are working step-by-step:
+
+1. Layout + navigation
+2. Dashboard
+3. Releases (one-click deploy)
+4. Deployments
+5. Logs
+6. Exposure
+
+---
+
+## Rules
+
+* Keep architecture clean (no logic in UI)
+* Do not over-engineer
+* Keep implementation minimal and production-safe
+* Prefer clarity over abstraction
+* No TODOs
+
+---
+
+## Current Task
+
+Implement Dashboard page 
