@@ -14,6 +14,7 @@ public sealed class FileSystem : IFileSystem
     {
         if (File.Exists(path))
         {
+            File.SetAttributes(path, FileAttributes.Normal);
             File.Delete(path);
         }
     }

@@ -83,15 +83,14 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
             return;
         }
 
-        var result = await _commandRunner.RunAsync(new CommandRequest
-        {
-            Command = "systemctl",
-            Arguments = ["restart", "cloudflared"]
-        }, ct);
+        var result = await _cloudflaredService.RestartAsync(cancellationToken: ct);
 
         if (!result.Succeeded)
         {
-            throw new InvalidOperationException("Failed to reload cloudflared.");
+            var details = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(details)
+                ? "Failed to reload cloudflared."
+                : $"Failed to reload cloudflared. {details.Trim()}");
         }
     }
 
@@ -119,8 +118,8 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
             throw new InvalidOperationException("cloudflared fallback ingress was not found.");
         }
 
-        lines.Insert(insertIndex, $"  service: http://localhost:{port}");
-        lines.Insert(insertIndex, $"- hostname: {hostname}");
+        lines.Insert(insertIndex, $"    service: http://localhost:{port}");
+        lines.Insert(insertIndex, $"  - hostname: {hostname}");
 
         var updatedContents = string.Join(Environment.NewLine, lines).TrimEnd() + Environment.NewLine;
         await _fileSystem.WriteAllBytesAsync(configPath, Encoding.UTF8.GetBytes(updatedContents), ct);
@@ -142,7 +141,7 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
         var contents = await _fileSystem.ReadAllTextAsync(configPath, ct);
         var lines = contents.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
         var updatedLines = new List<string>();
-        var hostnameLine = $"- hostname: {hostname}".Trim();
+        var hostnameLine = $"  - hostname: {hostname}".Trim();
 
         for (var i = 0; i < lines.Count; i++)
         {

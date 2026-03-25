@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ServerOps.Application.Abstractions;
 using ServerOps.Application.DTOs;
 using ServerOps.Domain.Enums;
+using Microsoft.Extensions.Logging;
 
 namespace ServerOps.Infrastructure.Host;
 
@@ -26,14 +27,17 @@ public sealed class CommandRunner : ICommandRunner
         "netstat",
         "cloudflared",
         "winget",
-        "powershell"
+        "powershell",
+        "where"
     };
 
     private readonly IRuntimeEnvironment _runtimeEnvironment;
+    private readonly ILogger<CommandRunner> _logger;
 
-    public CommandRunner(IRuntimeEnvironment runtimeEnvironment)
+    public CommandRunner(IRuntimeEnvironment runtimeEnvironment, ILogger<CommandRunner> logger)
     {
         _runtimeEnvironment = runtimeEnvironment;
+        _logger = logger;
     }
 
     public async Task<CommandResult> RunAsync(CommandRequest request, CancellationToken cancellationToken = default)
@@ -83,18 +87,105 @@ public sealed class CommandRunner : ICommandRunner
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
+        var isRoutineNoise = IsRoutineNoise(command, request.Arguments);
+        if (!isRoutineNoise)
+        {
+            _logger.LogInformation(
+                "CommandRunner exec command={Command} args={Arguments}",
+                command,
+                string.Join(" | ", request.Arguments));
+        }
 
-        var stdOutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stdErrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        using var process = new Process { StartInfo = startInfo };
+        var stdOut = new List<string>();
+        var stdErr = new List<string>();
+        var callbackTasks = new List<Task>();
+        var stdOutClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stdErrClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        process.OutputDataReceived += (_, args) =>
+        {
+            if (args.Data is null)
+            {
+                stdOutClosed.TrySetResult();
+                return;
+            }
+
+            lock (stdOut)
+            {
+                stdOut.Add(args.Data);
+            }
+
+            if (request.OnOutput is not null)
+            {
+                lock (callbackTasks)
+                {
+                    callbackTasks.Add(request.OnOutput(args.Data));
+                }
+            }
+        };
+
+        process.ErrorDataReceived += (_, args) =>
+        {
+            if (args.Data is null)
+            {
+                stdErrClosed.TrySetResult();
+                return;
+            }
+
+            lock (stdErr)
+            {
+                stdErr.Add(args.Data);
+            }
+
+            if (request.OnOutput is not null)
+            {
+                lock (callbackTasks)
+                {
+                    callbackTasks.Add(request.OnOutput(args.Data));
+                }
+            }
+        };
+
+        process.Start();
+        using var cancellationRegistration = cancellationToken.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+        });
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
         await process.WaitForExitAsync(cancellationToken);
+        await Task.WhenAll(stdOutClosed.Task, stdErrClosed.Task);
+        await Task.WhenAll(callbackTasks);
+
+        var stdOutText = string.Join(Environment.NewLine, stdOut);
+        var stdErrText = string.Join(Environment.NewLine, stdErr);
+
+        if (!isRoutineNoise)
+        {
+            _logger.LogInformation(
+                "CommandRunner result command={Command} exitCode={ExitCode} stdout={StdOut} stderr={StdErr}",
+                command,
+                process.ExitCode,
+                string.IsNullOrWhiteSpace(stdOutText) ? "-" : stdOutText,
+                string.IsNullOrWhiteSpace(stdErrText) ? "-" : stdErrText);
+        }
 
         return new CommandResult
         {
             ExitCode = process.ExitCode,
-            StdOut = await stdOutTask,
-            StdErr = await stdErrTask
+            StdOut = stdOutText,
+            StdErr = stdErrText
         };
     }
 
@@ -113,4 +204,23 @@ public sealed class CommandRunner : ICommandRunner
             _ => false
         };
     }
+
+    private static bool IsRoutineNoise(string command, IReadOnlyList<string> arguments)
+    {
+        if (command.Equals("where", StringComparison.OrdinalIgnoreCase) ||
+            command.Equals("netstat", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!command.Equals("sc", StringComparison.OrdinalIgnoreCase) || arguments.Count == 0)
+        {
+            return false;
+        }
+
+        return arguments[0].Equals("query", StringComparison.OrdinalIgnoreCase) ||
+               arguments[0].Equals("queryex", StringComparison.OrdinalIgnoreCase) ||
+               arguments[0].Equals("qc", StringComparison.OrdinalIgnoreCase);
+    }
+
 }

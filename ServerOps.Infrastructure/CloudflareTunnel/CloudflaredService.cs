@@ -44,14 +44,15 @@ public sealed class CloudflaredService : ICloudflaredService
 
     public async Task<bool> IsInstalledAsync(CancellationToken cancellationToken = default)
     {
-        if (_fileSystem.FileExists(GetBinaryPath()))
+        var binaryPath = await GetBinaryPathAsync(cancellationToken);
+        if (_fileSystem.FileExists(binaryPath))
         {
             return true;
         }
 
         var result = await _commandRunner.RunAsync(new CommandRequest
         {
-            Command = GetBinaryCommand(),
+            Command = await GetBinaryCommandAsync(cancellationToken),
             Arguments = ["--version"]
         }, cancellationToken);
 
@@ -102,16 +103,17 @@ public sealed class CloudflaredService : ICloudflaredService
         var resolvedOperationId = string.IsNullOrWhiteSpace(operationId) ? Guid.NewGuid().ToString("N") : operationId.Trim();
         if (await IsInstalledAsync(cancellationToken))
         {
+            var installedBinaryPath = await GetBinaryPathAsync(cancellationToken);
             return new CommandResult
             {
                 OperationId = resolvedOperationId,
                 ExitCode = 0,
-                StdOut = $"cloudflared already installed at {GetBinaryPath()}."
+                StdOut = $"cloudflared already installed at {installedBinaryPath}."
             };
         }
 
-        await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Install started path={GetBinaryPath()}", cancellationToken);
-        var binaryPath = GetBinaryPath();
+        var binaryPath = await GetBinaryPathAsync(cancellationToken);
+        await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Install started path={binaryPath}", cancellationToken);
         var binaryDirectory = Path.GetDirectoryName(binaryPath);
         if (!string.IsNullOrWhiteSpace(binaryDirectory))
         {
@@ -161,7 +163,12 @@ public sealed class CloudflaredService : ICloudflaredService
         try
         {
             var tunnelName = GetTunnelName();
-            await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create started name={tunnelName}", cancellationToken);
+            var binaryCommand = await GetBinaryCommandAsync(cancellationToken);
+            await _operationLogger.LogAsync(
+                resolvedOperationId,
+                "Tunnel",
+                $"Create started name={tunnelName}, binary={binaryCommand}, config={_runtimeEnvironment.GetCloudflaredConfigPath()}",
+                cancellationToken);
 
             var configDirectory = Path.GetDirectoryName(_runtimeEnvironment.GetCloudflaredConfigPath());
             if (!string.IsNullOrWhiteSpace(configDirectory))
@@ -169,39 +176,121 @@ public sealed class CloudflaredService : ICloudflaredService
                 _fileSystem.CreateDirectory(configDirectory);
             }
 
+            var temporaryCredentialsPath = GetManagedCredentialsPathForNewTunnel();
+            string? existingTempCredentialsContents = null;
+            if (_fileSystem.FileExists(temporaryCredentialsPath))
+            {
+                try
+                {
+                    existingTempCredentialsContents = await _fileSystem.ReadAllTextAsync(temporaryCredentialsPath, cancellationToken);
+                    _fileSystem.DeleteFile(temporaryCredentialsPath);
+                    await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create removed stale tempCredentials={temporaryCredentialsPath}", cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException($"Unable to remove stale temporary tunnel credentials file '{temporaryCredentialsPath}'. {ex.Message}");
+                }
+            }
+            await _operationLogger.LogAsync(
+                resolvedOperationId,
+                "Tunnel",
+                $"Create paths configDirectory={configDirectory}, tempCredentials={temporaryCredentialsPath}",
+                cancellationToken);
+
             var createResult = await _commandRunner.RunAsync(new CommandRequest
             {
-                Command = GetBinaryCommand(),
-                Arguments = ["tunnel", "create", tunnelName]
+                Command = binaryCommand,
+                Arguments = ["tunnel", "create", "--credentials-file", temporaryCredentialsPath, tunnelName]
             }, cancellationToken);
+            await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create command {DescribeCommandResult(createResult)}", cancellationToken);
 
-            if (!createResult.Succeeded)
+            var tunnelId = ExtractTunnelId(createResult.StdOut, createResult.StdErr);
+            await _operationLogger.LogAsync(
+                resolvedOperationId,
+                "Tunnel",
+                $"Create parsed tunnelId={(string.IsNullOrWhiteSpace(tunnelId) ? "-" : tunnelId)}, tempCredentialsExists={_fileSystem.FileExists(temporaryCredentialsPath)}",
+                cancellationToken);
+
+            if (!createResult.Succeeded && string.IsNullOrWhiteSpace(tunnelId))
             {
-                var details = GetFirstMeaningfulLine(string.IsNullOrWhiteSpace(createResult.StdErr) ? createResult.StdOut : createResult.StdErr);
+                if (IsTunnelAlreadyExistsError(createResult))
+                {
+                    tunnelId = await FindTunnelIdByNameAsync(tunnelName, cancellationToken);
+                    if (string.IsNullOrWhiteSpace(tunnelId))
+                    {
+                        throw new InvalidOperationException($"Tunnel '{tunnelName}' already exists, but its id could not be resolved.");
+                    }
+
+                    await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create adopting existing tunnel name={tunnelName}, id={tunnelId}", cancellationToken);
+                }
+            }
+
+            if (!createResult.Succeeded && string.IsNullOrWhiteSpace(tunnelId))
+            {
+                var details = GetFirstRelevantLine(string.IsNullOrWhiteSpace(createResult.StdErr) ? createResult.StdOut : createResult.StdErr);
                 throw new InvalidOperationException(string.IsNullOrWhiteSpace(details)
                     ? "Failed to create cloudflared tunnel. Make sure cloudflared is authenticated and cert.pem is available."
                     : details);
             }
 
-            var tunnelId = ExtractTunnelId(createResult.StdOut, createResult.StdErr);
             if (string.IsNullOrWhiteSpace(tunnelId))
             {
                 throw new InvalidOperationException("cloudflared tunnel was created but the tunnel id could not be determined.");
             }
 
-            var defaultCredentialsPath = Path.Combine(GetDefaultCloudflaredDirectory(), $"{tunnelId}.json");
-            if (!_fileSystem.FileExists(defaultCredentialsPath))
+            if (!_fileSystem.FileExists(temporaryCredentialsPath))
             {
-                throw new InvalidOperationException($"cloudflared tunnel credentials were not found at '{defaultCredentialsPath}'.");
+                if (!string.IsNullOrWhiteSpace(existingTempCredentialsContents))
+                {
+                    await _fileSystem.WriteAllBytesAsync(temporaryCredentialsPath, Encoding.UTF8.GetBytes(existingTempCredentialsContents), cancellationToken);
+                    await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create restored preserved temp credentials for existing tunnel id={tunnelId}", cancellationToken);
+                }
+                else
+                {
+                    var existingManagedCredentialsPath = GetManagedCredentialsPath(tunnelId);
+                    if (_fileSystem.FileExists(existingManagedCredentialsPath))
+                    {
+                        var managedContents = await _fileSystem.ReadAllTextAsync(existingManagedCredentialsPath, cancellationToken);
+                        await _fileSystem.WriteAllBytesAsync(temporaryCredentialsPath, Encoding.UTF8.GetBytes(managedContents), cancellationToken);
+                        await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create reused existing managed credentials from {existingManagedCredentialsPath}", cancellationToken);
+                    }
+                    else
+                    {
+                    var legacyCredentialsPath = GetLegacyCredentialsPath(tunnelId);
+                    if (_fileSystem.FileExists(legacyCredentialsPath))
+                    {
+                        var legacyContents = await _fileSystem.ReadAllTextAsync(legacyCredentialsPath, cancellationToken);
+                        await _fileSystem.WriteAllBytesAsync(temporaryCredentialsPath, Encoding.UTF8.GetBytes(legacyContents), cancellationToken);
+                        await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create migrated legacy credentials from {legacyCredentialsPath}", cancellationToken);
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException(
+                            $"Tunnel '{tunnelName}' already exists, but credentials were not found in the managed path. Expected temp '{temporaryCredentialsPath}', managed '{existingManagedCredentialsPath}', or legacy path '{legacyCredentialsPath}'.");
+                    }
+                    }
+                }
             }
 
             var managedCredentialsPath = GetManagedCredentialsPath(tunnelId);
-            var credentialsContents = await _fileSystem.ReadAllTextAsync(defaultCredentialsPath, cancellationToken);
+            var credentialsContents = await _fileSystem.ReadAllTextAsync(temporaryCredentialsPath, cancellationToken);
             await _fileSystem.WriteAllBytesAsync(managedCredentialsPath, Encoding.UTF8.GetBytes(credentialsContents), cancellationToken);
+            await _operationLogger.LogAsync(
+                resolvedOperationId,
+                "Tunnel",
+                $"Create credentials copied temp={temporaryCredentialsPath}, managed={managedCredentialsPath}, managedExists={_fileSystem.FileExists(managedCredentialsPath)}",
+                cancellationToken);
 
-            if (!string.Equals(defaultCredentialsPath, managedCredentialsPath, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(temporaryCredentialsPath, managedCredentialsPath, StringComparison.OrdinalIgnoreCase))
             {
-                _fileSystem.DeleteFile(defaultCredentialsPath);
+                try
+                {
+                    _fileSystem.DeleteFile(temporaryCredentialsPath);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    await _operationLogger.LogAsync(resolvedOperationId, "Tunnel", $"Create cleanup skipped lockedTempCredentials={temporaryCredentialsPath}", cancellationToken);
+                }
             }
 
             await WriteConfigAsync(tunnelId, managedCredentialsPath, cancellationToken);
@@ -260,10 +349,13 @@ public sealed class CloudflaredService : ICloudflaredService
             };
         }
 
+        var configPath = _runtimeEnvironment.GetCloudflaredConfigPath();
+        var credentialsPath = await ReadCredentialsPathAsync(configPath, cancellationToken);
+        var credentialsExists = !string.IsNullOrWhiteSpace(credentialsPath) && _fileSystem.FileExists(credentialsPath);
         await _operationLogger.LogAsync(
             resolvedOperationId,
             "Tunnel",
-            $"Start started tunnelId={tunnelInfo.TunnelId}, config={_runtimeEnvironment.GetCloudflaredConfigPath()}",
+            $"Start started tunnelId={tunnelInfo.TunnelId}, config={configPath}, configExists={_fileSystem.FileExists(configPath)}, credentialsPath={credentialsPath}, credentialsExists={credentialsExists}",
             cancellationToken);
 
         var ensureServiceResult = await EnsureConfigDrivenServiceAsync(tunnelInfo.TunnelId, cancellationToken);
@@ -392,6 +484,18 @@ public sealed class CloudflaredService : ICloudflaredService
                         : $"{startResult.StdErr}{Environment.NewLine}Service is already running."
                 };
             }
+
+            var finalQuery = await _commandRunner.RunAsync(
+                new CommandRequest { Command = "sc", Arguments = ["query", serviceName] },
+                cancellationToken);
+            var startDetails = string.IsNullOrWhiteSpace(startResult.StdErr) ? startResult.StdOut : startResult.StdErr;
+            var queryDetails = string.IsNullOrWhiteSpace(finalQuery.StdErr) ? finalQuery.StdOut : finalQuery.StdErr;
+
+            return new CommandResult
+            {
+                ExitCode = -1,
+                StdErr = $"Service '{serviceName}' did not reach RUNNING state after start. start={startDetails.Trim()} query={queryDetails.Trim()}".Trim()
+            };
         }
 
         return startResult;
@@ -484,7 +588,8 @@ public sealed class CloudflaredService : ICloudflaredService
     {
         var deletedPaths = new List<string>();
         var managedCredentialsPath = string.IsNullOrWhiteSpace(tunnelId) ? string.Empty : GetManagedCredentialsPath(tunnelId.Trim());
-        foreach (var path in new[] { GetMetadataPath(), _runtimeEnvironment.GetCloudflaredConfigPath(), managedCredentialsPath })
+        var temporaryCredentialsPath = GetManagedCredentialsPathForNewTunnel();
+        foreach (var path in new[] { GetMetadataPath(), _runtimeEnvironment.GetCloudflaredConfigPath(), managedCredentialsPath, temporaryCredentialsPath })
         {
             if (string.IsNullOrWhiteSpace(path) || !_fileSystem.FileExists(path))
             {
@@ -514,7 +619,7 @@ public sealed class CloudflaredService : ICloudflaredService
 
         var deleteResult = await _commandRunner.RunAsync(new CommandRequest
         {
-            Command = GetBinaryCommand(),
+            Command = await GetBinaryCommandAsync(cancellationToken),
             Arguments = ["tunnel", "delete", tunnelId.Trim()]
         }, cancellationToken);
 
@@ -528,7 +633,28 @@ public sealed class CloudflaredService : ICloudflaredService
             return;
         }
 
-        throw new InvalidOperationException(GetFailureMessage("Failed to delete remote tunnel.", deleteResult));
+        var details = GetFirstRelevantLine(string.IsNullOrWhiteSpace(deleteResult.StdErr) ? deleteResult.StdOut : deleteResult.StdErr);
+        if (string.IsNullOrWhiteSpace(details))
+        {
+            await _operationLogger.LogAsync(
+                operationId,
+                "Tunnel",
+                $"Delete remote completed with warningsIgnored tunnelId={tunnelId.Trim()}",
+                cancellationToken);
+            return;
+        }
+
+        if (details.Contains("already been deleted", StringComparison.OrdinalIgnoreCase))
+        {
+            await _operationLogger.LogAsync(
+                operationId,
+                "Tunnel",
+                $"Delete remote skipped alreadyDeleted tunnelId={tunnelId.Trim()}",
+                cancellationToken);
+            return;
+        }
+
+        throw new InvalidOperationException($"Failed to delete remote tunnel. {details}");
     }
 
     private static CommandResult WrapResult(CommandResult result, string operationId)
@@ -632,7 +758,6 @@ public sealed class CloudflaredService : ICloudflaredService
         var serviceDefinition = await _commandRunner.RunAsync(
             new CommandRequest { Command = "sc", Arguments = ["qc", "cloudflared"] },
             cancellationToken);
-
         if (serviceDefinition.Succeeded &&
             serviceDefinition.StdOut.Contains("--config", StringComparison.OrdinalIgnoreCase) &&
             serviceDefinition.StdOut.Contains(_runtimeEnvironment.GetCloudflaredConfigPath(), StringComparison.OrdinalIgnoreCase))
@@ -659,15 +784,24 @@ public sealed class CloudflaredService : ICloudflaredService
             }
         }
 
-        var binaryCommand = Quote(GetBinaryPath());
-        var configPath = Quote(_runtimeEnvironment.GetCloudflaredConfigPath());
-        var binPath = Quote($"{binaryCommand} tunnel --config {configPath} run {tunnelId}");
+        var binaryPath = await GetBinaryPathAsync(cancellationToken);
+        var configPath = _runtimeEnvironment.GetCloudflaredConfigPath();
+        var binPath = $"\"{binaryPath}\" tunnel --config \"{configPath}\" run {tunnelId}";
+        var configExists = _fileSystem.FileExists(configPath);
+        var credentialsPath = await ReadCredentialsPathAsync(configPath, cancellationToken);
+        var credentialsExists = !string.IsNullOrWhiteSpace(credentialsPath) && _fileSystem.FileExists(credentialsPath);
 
-        return await _commandRunner.RunAsync(new CommandRequest
+        var createResult = await _commandRunner.RunAsync(new CommandRequest
         {
             Command = "sc",
-            Arguments = ["create", "cloudflared", $"binPath={binPath}", "start=auto", "obj=LocalSystem"]
+            Arguments = ["create", "cloudflared", "binPath=", binPath, "start=", "auto", "obj=", "LocalSystem"]
         }, cancellationToken);
+        return new CommandResult
+        {
+            ExitCode = createResult.ExitCode,
+            StdOut = AppendDiagnosticDetails(createResult.StdOut, $"binaryPath={binaryPath}; configPath={configPath}; configExists={configExists}; credentialsPath={credentialsPath}; credentialsExists={credentialsExists}; binPath={binPath}"),
+            StdErr = createResult.StdErr
+        };
     }
 
     private async Task<CommandResult> EnsureLinuxServiceAsync(string tunnelId, CancellationToken cancellationToken)
@@ -710,7 +844,7 @@ public sealed class CloudflaredService : ICloudflaredService
 
     private string BuildLinuxCloudflaredUnit(string tunnelId)
     {
-        var binaryPath = GetBinaryPath();
+        var binaryPath = GetBinaryPathForLinux();
         var configPath = _runtimeEnvironment.GetCloudflaredConfigPath();
         return $$"""
 [Unit]
@@ -745,18 +879,77 @@ WantedBy=multi-user.target
                result.StdOut.Contains("LoadState=loaded", StringComparison.OrdinalIgnoreCase);
     }
 
-    private string GetBinaryCommand()
-        => _runtimeEnvironment.GetCurrentOs() == OsType.Windows && _fileSystem.FileExists(GetBinaryPath())
-            ? GetBinaryPath()
-            : "cloudflared";
-
-    private string GetBinaryPath()
+    private Task<string> GetBinaryCommandAsync(CancellationToken cancellationToken)
         => _runtimeEnvironment.GetCurrentOs() == OsType.Windows
-            ? @"C:\Cloudflared\bin\cloudflared.exe"
-            : "/usr/local/bin/cloudflared";
+            ? GetWindowsBinaryPathAsync(cancellationToken)
+            : Task.FromResult("cloudflared");
+
+    private Task<string> GetBinaryPathAsync(CancellationToken cancellationToken)
+        => _runtimeEnvironment.GetCurrentOs() == OsType.Windows
+            ? GetWindowsBinaryPathAsync(cancellationToken)
+            : Task.FromResult(GetBinaryPathForLinux());
 
     private string GetDownloadUrl()
         => _runtimeEnvironment.GetCurrentOs() == OsType.Windows ? WindowsDownloadUrl : LinuxDownloadUrl;
+
+    private string GetBinaryPathForLinux() => "/usr/local/bin/cloudflared";
+
+    private async Task<string> GetWindowsBinaryPathAsync(CancellationToken cancellationToken)
+    {
+        var resolvedPath = await TryResolveWindowsBinaryPathAsync(cancellationToken);
+        return string.IsNullOrWhiteSpace(resolvedPath) ? @"C:\Cloudflared\bin\cloudflared.exe" : resolvedPath;
+    }
+
+    private async Task<string> TryResolveWindowsBinaryPathAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var whereResult = await _commandRunner.RunAsync(new CommandRequest
+            {
+                Command = "where",
+                Arguments = ["cloudflared"]
+            }, cancellationToken);
+
+            if (whereResult.Succeeded)
+            {
+                var lines = whereResult.StdOut
+                    .ReplaceLineEndings("\n")
+                    .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+                foreach (var line in lines)
+                {
+                    if (_fileSystem.FileExists(line))
+                    {
+                        return line;
+                    }
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        var pathEntries = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var entry in pathEntries)
+        {
+            try
+            {
+                var candidate = Path.Combine(entry, "cloudflared.exe");
+                if (_fileSystem.FileExists(candidate))
+                {
+                    return candidate;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        var fallback = @"C:\Cloudflared\bin\cloudflared.exe";
+        return _fileSystem.FileExists(fallback) ? fallback : string.Empty;
+    }
 
     private string GetMetadataPath()
     {
@@ -771,18 +964,13 @@ WantedBy=multi-user.target
         return Path.Combine(configDirectory, $"{tunnelId}.json");
     }
 
-    private string GetTunnelName() => Environment.MachineName.Trim().ToLowerInvariant();
-
-    private string GetDefaultCloudflaredDirectory()
+    private string GetManagedCredentialsPathForNewTunnel()
     {
-        if (_runtimeEnvironment.GetCurrentOs() == OsType.Windows)
-        {
-            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            return Path.Combine(userProfile, ".cloudflared");
-        }
-
-        return "/root/.cloudflared";
+        var configDirectory = Path.GetDirectoryName(_runtimeEnvironment.GetCloudflaredConfigPath()) ?? Path.GetTempPath();
+        return Path.Combine(configDirectory, "tunnel-credentials.json");
     }
+
+    private string GetTunnelName() => Environment.MachineName.Trim().ToLowerInvariant();
 
     private async Task<RemoteTunnelMetadata> ReadMetadataAsync(string metadataPath, CancellationToken cancellationToken)
     {
@@ -897,17 +1085,104 @@ ingress:
         return string.Empty;
     }
 
-    private static string GetFirstMeaningfulLine(string? value)
+    private async Task<string> FindTunnelIdByNameAsync(string tunnelName, CancellationToken cancellationToken)
+    {
+        var listResult = await _commandRunner.RunAsync(new CommandRequest
+        {
+            Command = await GetBinaryCommandAsync(cancellationToken),
+            Arguments = ["tunnel", "list", "--output", "json"]
+        }, cancellationToken);
+
+        if (!listResult.Succeeded || string.IsNullOrWhiteSpace(listResult.StdOut))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(listResult.StdOut);
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var name = item.TryGetProperty("name", out var nameProperty) ? nameProperty.GetString() : string.Empty;
+                if (!string.Equals(name, tunnelName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                return item.TryGetProperty("id", out var idProperty) ? idProperty.GetString() ?? string.Empty : string.Empty;
+            }
+        }
+        catch
+        {
+        }
+
+        return string.Empty;
+    }
+
+    private static bool IsTunnelAlreadyExistsError(CommandResult result)
+    {
+        var combined = string.Join(
+            Environment.NewLine,
+            new[] { result.StdOut, result.StdErr }.Where(static value => !string.IsNullOrWhiteSpace(value)));
+
+        return combined.Contains("already exists", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetFirstRelevantLine(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {
             return string.Empty;
         }
 
-        return value
+        var lines = value
             .ReplaceLineEndings("\n")
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault() ?? string.Empty;
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var line in lines)
+        {
+            if (line.Contains("outdated", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("WRN ", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return line;
+        }
+
+        return lines.FirstOrDefault() ?? string.Empty;
+    }
+
+    private async Task<string> ReadCredentialsPathAsync(string configPath, CancellationToken cancellationToken)
+    {
+        if (!_fileSystem.FileExists(configPath))
+        {
+            return string.Empty;
+        }
+
+        var parsedConfig = await ReadConfigAsync(configPath, cancellationToken);
+        return parsedConfig.CredentialsFile;
+    }
+
+    private static string AppendDiagnosticDetails(string text, string details)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return details;
+        }
+
+        return $"{text}{Environment.NewLine}{details}";
+    }
+
+    private string GetLegacyCredentialsPath(string tunnelId)
+    {
+        if (_runtimeEnvironment.GetCurrentOs() == OsType.Windows)
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Path.Combine(userProfile, ".cloudflared", $"{tunnelId}.json");
+        }
+
+        return Path.Combine("/root/.cloudflared", $"{tunnelId}.json");
     }
 
     private sealed class RemoteTunnelMetadata

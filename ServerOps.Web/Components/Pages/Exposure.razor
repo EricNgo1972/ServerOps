@@ -46,7 +46,14 @@
                                         class="btn btn-secondary"
                                         disabled="@_isTunnelActionRunning"
                                         @onclick="InstallTunnelAsync">
-                                    Install cloudflared
+                                    @if (IsTunnelActionActive("Install cloudflared"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Installing</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Install cloudflared</span>
+                                    }
                                 </button>
                             }
 
@@ -56,7 +63,14 @@
                                         class="btn btn-primary"
                                         disabled="@_isTunnelActionRunning"
                                         @onclick="CreateTunnelAsync">
-                                    Create tunnel
+                                    @if (IsTunnelActionActive("Create tunnel"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Creating</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Create tunnel</span>
+                                    }
                                 </button>
                             }
 
@@ -66,7 +80,14 @@
                                         class="btn btn-primary"
                                         disabled="@_isTunnelActionRunning"
                                         @onclick="StartTunnelAsync">
-                                    Start tunnel
+                                    @if (IsTunnelActionActive("Start tunnel"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Starting</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Start tunnel</span>
+                                    }
                                 </button>
                             }
 
@@ -76,7 +97,14 @@
                                         class="btn btn-secondary"
                                         disabled="@_isTunnelActionRunning"
                                         @onclick="RestartTunnelAsync">
-                                    Restart tunnel
+                                    @if (IsTunnelActionActive("Restart tunnel"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Restarting</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Restart tunnel</span>
+                                    }
                                 </button>
                             }
 
@@ -92,7 +120,14 @@
                                                 class="btn btn-danger"
                                                 disabled="@_isTunnelActionRunning"
                                                 @onclick="ConfirmDeleteTunnelAsync">
-                                            Delete tunnel
+                                            @if (IsTunnelActionActive("Delete tunnel"))
+                                            {
+                                                <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Deleting</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="btn-content">Delete tunnel</span>
+                                            }
                                         </button>
                                         <button type="button"
                                                 class="btn btn-secondary"
@@ -108,7 +143,7 @@
                                             class="btn btn-danger"
                                             disabled="@_isTunnelActionRunning"
                                             @onclick="PromptDeleteTunnel">
-                                        Delete tunnel
+                                        <span class="btn-content">Delete tunnel</span>
                                     </button>
                                 }
                             }
@@ -231,13 +266,27 @@
                                         class="btn btn-secondary"
                                         disabled="@isProcessing || _isTunnelActionRunning || !tunnelReady || !CanUpdate(app, endpoint)"
                                         @onclick="() => UpdateExposureAsync(app)">
-                                    Update
+                                    @if (IsAppActionActive(app, "Update exposure"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Updating</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Update</span>
+                                    }
                                 </button>
                                 <button type="button"
                                         class="btn btn-danger"
                                         disabled="@isProcessing || _isTunnelActionRunning"
                                         @onclick="() => RemoveExposureAsync(app)">
-                                    Remove
+                                    @if (IsAppActionActive(app, "Remove exposure"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Removing</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Remove</span>
+                                    }
                                 </button>
                             }
                             else
@@ -246,7 +295,14 @@
                                         class="btn btn-primary"
                                         disabled ="@isDisable"
                                         @onclick="() => ExposeAsync(app)">
-                                    Expose
+                                    @if (IsAppActionActive(app, "Expose"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Exposing</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Expose</span>
+                                    }
                                 </button>
                             }
                         </div>
@@ -271,6 +327,8 @@
     private bool _tunnelLoaded;
     private bool _isTunnelActionRunning;
     private bool _isDeleteTunnelConfirming;
+    private string _activeTunnelAction = string.Empty;
+    private string _activeAppAction = string.Empty;
     private TunnelInfo? _tunnelInfo;
 
     protected override async Task OnInitializedAsync()
@@ -437,9 +495,8 @@
         }
 
         _isTunnelActionRunning = true;
+        _activeTunnelAction = title;
         _isDeleteTunnelConfirming = false;
-        _message = string.Empty;
-        _isError = false;
         await InvokeAsync(StateHasChanged);
 
         try
@@ -447,24 +504,28 @@
             var operationId = Guid.NewGuid().ToString("N");
             LiveOperationLogState.Open(operationId, title);
             var result = await action(operationId);
-            var message = result.Succeeded
-                ? GetFirstMeaningfulLine(result.StdOut) is { Length: > 0 } successMessage ? successMessage : "Tunnel action completed successfully."
-                : GetFirstMeaningfulLine(result.StdErr) is { Length: > 0 } errorMessage ? errorMessage : "Tunnel action failed.";
-            var isError = !result.Succeeded;
+            if (!result.Succeeded)
+            {
+                var details = GetFirstMeaningfulLine(result.StdErr);
+                if (string.IsNullOrWhiteSpace(details))
+                {
+                    details = GetFirstMeaningfulLine(result.StdOut);
+                }
+
+                Logger.LogWarning("Tunnel action returned failure: {Title}. {Details}", title, details);
+            }
+
             await LoadAsync();
-            _message = message;
-            _isError = isError;
         }
         catch (Exception ex)
         {
-            var message = string.IsNullOrWhiteSpace(ex.Message) ? "Tunnel action failed." : ex.Message;
+            Logger.LogError(ex, "Tunnel action failed: {Title}", title);
             await LoadAsync();
-            _message = message;
-            _isError = true;
         }
         finally
         {
             _isTunnelActionRunning = false;
+            _activeTunnelAction = string.Empty;
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -505,6 +566,7 @@
         }
 
         _processingAppId = rowId;
+        _activeAppAction = actionTitle;
         _message = string.Empty;
         _isError = false;
         await InvokeAsync(StateHasChanged);
@@ -526,9 +588,18 @@
         finally
         {
             _processingAppId = string.Empty;
+            _activeAppAction = string.Empty;
             await LoadAsync();
         }
     }
+
+    private bool IsTunnelActionActive(string actionTitle) =>
+        _isTunnelActionRunning &&
+        string.Equals(_activeTunnelAction, actionTitle, StringComparison.Ordinal);
+
+    private bool IsAppActionActive(AppInstance app, string actionTitle) =>
+        string.Equals(_processingAppId, GetRowId(app), StringComparison.Ordinal) &&
+        string.Equals(_activeAppAction, actionTitle, StringComparison.Ordinal);
 
     private bool CanExpose(AppInstance app)
     {

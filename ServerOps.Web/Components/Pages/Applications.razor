@@ -6,6 +6,7 @@
 @inject IAppCatalogService AppCatalogService
 @inject IServiceControlService ServiceControlService
 @inject IAppRemovalService AppRemovalService
+@inject IEndpointRegistry EndpointRegistry
 @inject ServerOps.Web.Services.LiveOperationLogState LiveOperationLogState
 
 <PageTitle>Applications</PageTitle>
@@ -84,7 +85,14 @@
                                             class="btn btn-secondary"
                                             disabled="@isProcessing"
                                             @onclick="() => ExecuteActionAsync(app, ServiceAction.Start)">
-                                        Start
+                                        @if (IsAppActionActive(app, "Start"))
+                                        {
+                                            <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Starting</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="btn-content">Start</span>
+                                        }
                                     </button>
                                 }
                                 else if (app.Status == ServiceStatus.Running)
@@ -93,7 +101,14 @@
                                             class="btn btn-secondary"
                                             disabled="@isProcessing"
                                             @onclick="() => ExecuteActionAsync(app, ServiceAction.Stop)">
-                                        Stop
+                                        @if (IsAppActionActive(app, "Stop"))
+                                        {
+                                            <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Stopping</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="btn-content">Stop</span>
+                                        }
                                     </button>
                                 }
 
@@ -101,7 +116,14 @@
                                         class="btn btn-primary"
                                         disabled="@isProcessing"
                                         @onclick="() => ExecuteActionAsync(app, ServiceAction.Restart)">
-                                    Restart
+                                    @if (IsAppActionActive(app, "Restart"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Restarting</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Restart</span>
+                                    }
                                 </button>
 
                                 @if (isConfirmingRemoval)
@@ -112,13 +134,20 @@
                                                 class="btn btn-danger"
                                                 disabled="@isProcessing"
                                                 @onclick="() => RemoveAppAsync(app)">
-                                            Confirm
+                                            @if (IsAppActionActive(app, "Remove"))
+                                            {
+                                                <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Removing</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="btn-content">Confirm</span>
+                                            }
                                         </button>
                                         <button type="button"
                                                 class="btn btn-secondary"
                                                 disabled="@isProcessing"
                                                 @onclick="CancelRemoval">
-                                            Cancel
+                                            <span class="btn-content">Cancel</span>
                                         </button>
                                     </div>
                                 }
@@ -128,7 +157,7 @@
                                             class="btn btn-danger"
                                             disabled="@isProcessing"
                                             @onclick="() => BeginRemoval(rowId)">
-                                        Remove
+                                        <span class="btn-content">Remove</span>
                                     </button>
                                 }
                             </div>
@@ -142,9 +171,11 @@
 
 @code {
     private IReadOnlyList<AppInstance> _apps = Array.Empty<AppInstance>();
+    private IReadOnlyList<ServerOps.Application.Models.EndpointMapping> _mappings = Array.Empty<ServerOps.Application.Models.EndpointMapping>();
     private bool _isLoading = true;
     private string _processingAppId = string.Empty;
     private string _confirmingRemovalAppId = string.Empty;
+    private string _activeAction = string.Empty;
     private string _message = string.Empty;
     private bool _isError;
 
@@ -160,11 +191,16 @@
 
         try
         {
-            _apps = await AppCatalogService.GetApplicationsAsync();
+            var appsTask = AppCatalogService.GetApplicationsAsync();
+            var mappingsTask = EndpointRegistry.GetMappingsAsync();
+            await Task.WhenAll(appsTask, mappingsTask);
+            _apps = await appsTask;
+            _mappings = await mappingsTask;
         }
         catch (Exception ex)
         {
             _apps = Array.Empty<AppInstance>();
+            _mappings = Array.Empty<ServerOps.Application.Models.EndpointMapping>();
             _message = string.IsNullOrWhiteSpace(ex.Message)
                 ? "Unable to load applications."
                 : ex.Message;
@@ -187,6 +223,7 @@
 
         _processingAppId = rowId;
         _confirmingRemovalAppId = string.Empty;
+        _activeAction = action.ToString();
         _message = string.Empty;
         _isError = false;
         StateHasChanged();
@@ -220,6 +257,7 @@
         finally
         {
             _processingAppId = string.Empty;
+            _activeAction = string.Empty;
             if (!_isError && effectiveAction is ServiceAction.Start or ServiceAction.Restart)
             {
                 await Task.Delay(1500);
@@ -232,6 +270,16 @@
 
     private void BeginRemoval(string rowId)
     {
+        var app = _apps.FirstOrDefault(candidate => string.Equals(GetRowId(candidate), rowId, StringComparison.Ordinal));
+        if (app is not null && IsAppExposed(app))
+        {
+            _confirmingRemovalAppId = string.Empty;
+            _message = $"Un-expose {GetAppName(app)} first before removing it.";
+            _isError = true;
+            StateHasChanged();
+            return;
+        }
+
         _confirmingRemovalAppId = rowId;
         _message = string.Empty;
         _isError = false;
@@ -244,6 +292,15 @@
 
     private async Task RemoveAppAsync(AppInstance app)
     {
+        if (IsAppExposed(app))
+        {
+            _confirmingRemovalAppId = string.Empty;
+            _message = $"Un-expose {GetAppName(app)} first before removing it.";
+            _isError = true;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
         var rowId = GetRowId(app);
         if (string.Equals(_processingAppId, rowId, StringComparison.Ordinal))
         {
@@ -252,6 +309,7 @@
 
         _processingAppId = rowId;
         _confirmingRemovalAppId = string.Empty;
+        _activeAction = "Remove";
         _message = string.Empty;
         _isError = false;
         await InvokeAsync(StateHasChanged);
@@ -274,6 +332,7 @@
         finally
         {
             _processingAppId = string.Empty;
+            _activeAction = string.Empty;
             
             await LoadAppsAsync();
 
@@ -338,6 +397,47 @@
             ServiceAction.Stop => "stopped",
             _ => "restarted"
         };
+
+    private bool IsAppActionActive(AppInstance app, string actionName) =>
+        string.Equals(_processingAppId, GetRowId(app), StringComparison.Ordinal) &&
+        string.Equals(_activeAction, actionName, StringComparison.Ordinal);
+
+    private bool IsAppExposed(AppInstance app) => FindMapping(app.ServiceName) is not null;
+
+    private ServerOps.Application.Models.EndpointMapping? FindMapping(string? serviceName)
+    {
+        var normalizedServiceName = NormalizeServiceName(serviceName);
+        if (string.IsNullOrWhiteSpace(normalizedServiceName) || _mappings.Count == 0)
+        {
+            return null;
+        }
+
+        return _mappings
+            .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ServiceName) && !string.IsNullOrWhiteSpace(mapping.Hostname))
+            .OrderByDescending(mapping => NormalizeServiceName(mapping.ServiceName).Length)
+            .FirstOrDefault(mapping => NamesMatch(normalizedServiceName, NormalizeServiceName(mapping.ServiceName)));
+    }
+
+    private static bool NamesMatch(string left, string right)
+    {
+        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return left.StartsWith(right + "-", StringComparison.OrdinalIgnoreCase) ||
+               left.StartsWith(right + ".", StringComparison.OrdinalIgnoreCase) ||
+               right.StartsWith(left + "-", StringComparison.OrdinalIgnoreCase) ||
+               right.StartsWith(left + ".", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeServiceName(string? serviceName)
+    {
+        return (serviceName ?? string.Empty)
+            .Replace(".service", "", StringComparison.OrdinalIgnoreCase)
+            .Trim()
+            .ToLowerInvariant();
+    }
 
     private static string GetFirstMeaningfulLine(string? value)
     {

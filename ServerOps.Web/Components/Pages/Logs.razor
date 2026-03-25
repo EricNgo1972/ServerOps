@@ -4,6 +4,7 @@
 @rendermode InteractiveServer
 @inject IJSRuntime JS
 @inject IRuntimeEnvironment RuntimeEnvironment
+@inject IFileSystem FileSystem
 
 <PageTitle>Logs</PageTitle>
 
@@ -33,18 +34,109 @@
         }
         else
         {
+            <div class="logs-toolbar">
+                <div class="field logs-retention-field">
+                    <span>Delete files older than</span>
+                    <input type="date"
+                           value="@_deleteOlderThanDateText"
+                           disabled="@_isBulkDeleting"
+                           @onchange="OnDeleteOlderThanDateChanged"
+                           />
+                </div>
+                <div class="action-group">
+                    @if (_confirmingBulkDelete)
+                    {
+                        <button type="button"
+                                class="btn btn-danger"
+                                disabled="@_isBulkDeleting"
+                                @onclick="DeleteOlderThanAsync">
+                            @if (_isBulkDeleting)
+                            {
+                                <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Deleting</span>
+                            }
+                            else
+                            {
+                                <span class="btn-content">Confirm</span>
+                            }
+                        </button>
+                        <button type="button"
+                                class="btn btn-secondary"
+                                disabled="@_isBulkDeleting"
+                                @onclick="CancelBulkDelete">
+                            <span class="btn-content">Cancel</span>
+                        </button>
+                    }
+                    else
+                    {
+                        <button type="button"
+                                class="btn btn-danger"
+                                disabled="@_isBulkDeleting"
+                                @onclick="BeginBulkDelete">
+                            <span class="btn-content">Delete older logs</span>
+                        </button>
+                    }
+                </div>
+            </div>
+
             <div class="logs-file-list">
                 @foreach (var logFile in _logFiles)
                 {
-                    <button type="button"
-                            class="logs-file-item"
-                            @onclick="() => DownloadAsync(logFile)">
+                    var isProcessing = string.Equals(_processingFileName, logFile.Name, StringComparison.OrdinalIgnoreCase);
+                    var isConfirmingDelete = string.Equals(_confirmingDeleteFileName, logFile.Name, StringComparison.OrdinalIgnoreCase);
+
+                    <div class="logs-file-item">
                         <div class="logs-file-main">
                             <div class="logs-file-name">@logFile.Name</div>
                             <div class="logs-file-meta">@FormatTimestamp(logFile.LastModifiedUtc)</div>
                         </div>
-                        <span class="btn btn-secondary">Download</span>
-                    </button>
+                        <div class="action-group">
+                            <button type="button"
+                                    class="btn btn-secondary"
+                                    disabled="@isProcessing"
+                                    @onclick="() => DownloadAsync(logFile)">
+                                @if (IsActiveFileAction(logFile.Name, "Download"))
+                                {
+                                    <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Downloading</span>
+                                }
+                                else
+                                {
+                                    <span class="btn-content">Download</span>
+                                }
+                            </button>
+
+                            @if (isConfirmingDelete)
+                            {
+                                <button type="button"
+                                        class="btn btn-danger"
+                                        disabled="@isProcessing"
+                                        @onclick="() => DeleteAsync(logFile)">
+                                    @if (IsActiveFileAction(logFile.Name, "Delete"))
+                                    {
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Deleting</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="btn-content">Confirm</span>
+                                    }
+                                </button>
+                                <button type="button"
+                                        class="btn btn-secondary"
+                                        disabled="@isProcessing"
+                                        @onclick="CancelDelete">
+                                    <span class="btn-content">Cancel</span>
+                                </button>
+                            }
+                            else
+                            {
+                                <button type="button"
+                                        class="btn btn-danger"
+                                        disabled="@isProcessing"
+                                        @onclick="() => BeginDelete(logFile.Name)">
+                                    <span class="btn-content">Delete</span>
+                                </button>
+                            }
+                        </div>
+                    </div>
                 }
             </div>
         }
@@ -56,6 +148,12 @@
     private bool _isLoading = true;
     private string _errorMessage = string.Empty;
     private string _logDirectory = string.Empty;
+    private string _processingFileName = string.Empty;
+    private string _confirmingDeleteFileName = string.Empty;
+    private string _activeFileAction = string.Empty;
+    private string _deleteOlderThanDateText = string.Empty;
+    private bool _confirmingBulkDelete;
+    private bool _isBulkDeleting;
 
     protected override Task OnInitializedAsync()
     {
@@ -104,6 +202,9 @@
     private async Task DownloadAsync(LogFileItem logFile)
     {
         _errorMessage = string.Empty;
+        _processingFileName = logFile.Name;
+        _activeFileAction = "Download";
+        await InvokeAsync(StateHasChanged);
 
         try
         {
@@ -123,10 +224,149 @@
                 ? "Unable to download log file."
                 : ex.Message;
         }
+        finally
+        {
+            _processingFileName = string.Empty;
+            _activeFileAction = string.Empty;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void BeginDelete(string fileName)
+    {
+        _confirmingDeleteFileName = fileName;
+        _errorMessage = string.Empty;
+    }
+
+    private void CancelDelete()
+    {
+        _confirmingDeleteFileName = string.Empty;
+    }
+
+    private void BeginBulkDelete()
+    {
+        _confirmingBulkDelete = true;
+        _errorMessage = string.Empty;
+    }
+
+    private void CancelBulkDelete()
+    {
+        _confirmingBulkDelete = false;
+    }
+
+    private async Task DeleteAsync(LogFileItem logFile)
+    {
+        _errorMessage = string.Empty;
+        _processingFileName = logFile.Name;
+        _activeFileAction = "Delete";
+        _confirmingDeleteFileName = string.Empty;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var path = Path.Combine(_logDirectory, logFile.Name);
+            if (!FileSystem.FileExists(path))
+            {
+                _errorMessage = "Log file was not found.";
+                return;
+            }
+
+            FileSystem.DeleteFile(path);
+            LoadLogFiles();
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to delete log file."
+                : ex.Message;
+        }
+        finally
+        {
+            _processingFileName = string.Empty;
+            _activeFileAction = string.Empty;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task DeleteOlderThanAsync()
+    {
+        _errorMessage = string.Empty;
+        _confirmingBulkDelete = false;
+        _isBulkDeleting = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            if (!TryGetDeleteOlderThanDate(out var cutoffLocalDate))
+            {
+                _errorMessage = "Select a valid date first.";
+                return;
+            }
+
+            var deletedCount = 0;
+            foreach (var logFile in _logFiles.ToList())
+            {
+                if (logFile.LastModifiedUtc.ToLocalTime().Date >= cutoffLocalDate.Date)
+                {
+                    continue;
+                }
+
+                var path = Path.Combine(_logDirectory, logFile.Name);
+                if (!FileSystem.FileExists(path))
+                {
+                    continue;
+                }
+
+                FileSystem.DeleteFile(path);
+                deletedCount++;
+            }
+
+            LoadLogFiles();
+            if (deletedCount == 0)
+            {
+                _errorMessage = "No log files matched the selected date.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _errorMessage = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to delete older log files."
+                : ex.Message;
+        }
+        finally
+        {
+            _isBulkDeleting = false;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
     private static string FormatTimestamp(DateTime value)
         => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
+    private bool IsActiveFileAction(string fileName, string actionName) =>
+        string.Equals(_processingFileName, fileName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(_activeFileAction, actionName, StringComparison.Ordinal);
+
+    private void OnDeleteOlderThanDateChanged(ChangeEventArgs args)
+    {
+        _deleteOlderThanDateText = args.Value?.ToString() ?? string.Empty;
+        StateHasChanged();
+    }
+
+    private bool TryGetDeleteOlderThanDate(out DateTime value)
+    {
+        if (DateTime.TryParseExact(
+            _deleteOlderThanDateText,
+            "yyyy-MM-dd",
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None,
+            out value))
+        {
+            return true;
+        }
+
+        return DateTime.TryParse(_deleteOlderThanDateText, out value);
+    }
 
     private sealed class LogFileItem
     {
