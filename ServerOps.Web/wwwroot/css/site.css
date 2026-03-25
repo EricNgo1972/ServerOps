@@ -33,6 +33,10 @@ body {
     line-height: 1.5;
 }
 
+code {
+    font-family: Consolas, "Courier New", monospace;
+}
+
 a {
     color: inherit;
     text-decoration: none;
@@ -84,6 +88,34 @@ a {
 
 .content {
     padding: var(--space-6);
+}
+
+.startup-gate {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: var(--space-6);
+}
+
+.startup-gate-card {
+    width: min(560px, 100%);
+    display: grid;
+    gap: var(--space-3);
+    text-align: center;
+    background: var(--surface);
+    border: 1px solid rgba(239, 68, 68, 0.45);
+    border-radius: 18px;
+    padding: 2.5rem 2rem;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+}
+
+.startup-gate-icon {
+    font-size: 2.5rem;
+}
+
+.startup-gate-card p {
+    margin: 0;
+    color: var(--muted);
 }
 
 .page-container {

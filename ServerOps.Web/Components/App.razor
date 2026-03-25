@@ -7,10 +7,29 @@
     <link rel="stylesheet" href="css/site.css" />
     <HeadOutlet />
 </head>
+@inject IConfiguration Configuration
 <body>
-    <CascadingAuthenticationState>
-        <Routes />
-    </CascadingAuthenticationState>
+    @if (IsStorageConnectionConfigured)
+    {
+        <CascadingAuthenticationState>
+            <Routes />
+        </CascadingAuthenticationState>
+    }
+    else
+    {
+        <main class="startup-gate">
+            <section class="startup-gate-card">
+                <div class="startup-gate-icon">⚠️</div>
+                <h1>ServerOps Is Not Configured</h1>
+                <p>
+                    <code>STORAGE_CONNECTION_STRING</code> is missing.
+                </p>
+                <p>
+                    Run ServerOps with a valid Azure Storage connection string, then refresh this page.
+                </p>
+            </section>
+        </main>
+    }
     <script>
         window.serverOpsDownloadTextFile = function (fileName, content) {
             const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -46,3 +65,8 @@
     <script src="_framework/blazor.web.js"></script>
 </body>
 </html>
+
+@code {
+    private bool IsStorageConnectionConfigured =>
+        !string.IsNullOrWhiteSpace(Configuration["STORAGE_CONNECTION_STRING"]);
+}
