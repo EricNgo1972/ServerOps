@@ -1,0 +1,69 @@
+name: Create Release Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag to create
+        required: true
+      release_name:
+        description: Optional release title
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_ROOT: ${{ runner.temp }}/serverops-release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore ServerOps.Web/ServerOps.Web.csproj
+
+      - name: Publish Windows package
+        run: dotnet publish ServerOps.Web/ServerOps.Web.csproj -c Release -r win-x64 --self-contained false -o "$BUILD_ROOT/win-x64"
+
+      - name: Publish Linux package
+        run: dotnet publish ServerOps.Web/ServerOps.Web.csproj -c Release -r linux-x64 --self-contained false -o "$BUILD_ROOT/linux-x64"
+
+      - name: Include bootstrap files
+        run: |
+          cp install-windows-service.ps1 "$BUILD_ROOT/win-x64/"
+          cp install.sh serverops.service "$BUILD_ROOT/linux-x64/"
+
+      - name: Create zip packages
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          mkdir -p "$BUILD_ROOT/release"
+          cd "$BUILD_ROOT/win-x64" && zip -r "$BUILD_ROOT/release/ServerOps-${RELEASE_TAG}-win-x64.zip" . >/dev/null
+          cd "$BUILD_ROOT/linux-x64" && zip -r "$BUILD_ROOT/release/ServerOps-${RELEASE_TAG}-linux-x64.zip" . >/dev/null
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          RELEASE_NAME: ${{ github.event.inputs.release_name }}
+        run: |
+          TITLE="${RELEASE_NAME:-$RELEASE_TAG}"
+          gh release create "$RELEASE_TAG" \
+            "$BUILD_ROOT/release/ServerOps-${RELEASE_TAG}-win-x64.zip" \
+            "$BUILD_ROOT/release/ServerOps-${RELEASE_TAG}-linux-x64.zip" \
+            --title "$TITLE" \
+            --notes "Manual release package build for Windows and Linux." \
+            --target "$GITHUB_SHA"
+
+      - name: Cleanup temporary build files
+        if: always()
+        run: rm -rf "$BUILD_ROOT"

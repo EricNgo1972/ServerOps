@@ -145,3 +145,19 @@ Additional documentation:
 - [`docs/modules.md`](/mnt/c/SPC/spc-setup/docs/modules.md)
 - [`docs/user-guide.md`](/mnt/c/SPC/spc-setup/docs/user-guide.md)
 - [`docs/github-action-deploy.yml`](/mnt/c/SPC/spc-setup/docs/github-action-deploy.yml)
+
+## GitHub Release Packaging
+
+A manual GitHub Actions workflow is included at:
+
+- [`.github/workflows/create-release-packages.yml`](/mnt/c/spc/spc-setup/.github/workflows/create-release-packages.yml)
+
+It publishes `ServerOps.Web` for:
+
+- `win-x64`
+- `linux-x64`
+
+Then it creates a GitHub Release and uploads:
+
+- `ServerOps-<tag>-win-x64.zip`
+- `ServerOps-<tag>-linux-x64.zip`
