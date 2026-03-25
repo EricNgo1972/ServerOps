@@ -1,6 +1,9 @@
+using Microsoft.Extensions.Configuration;
 using ServerOps.Web.Api;
 using ServerOps.Infrastructure.Configuration;
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Configuration.Sources.Add(new AzureTableConfigurationSource());
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();

@@ -67,8 +67,9 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddHttpClient<IGitHubService, GitHubService>((serviceProvider, client) =>
         {
+            var configuration = serviceProvider.GetRequiredService<IConfiguration>();
             var options = serviceProvider.GetRequiredService<IOptions<GitHubOptions>>().Value;
-            var token = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+            var token = configuration["GITHUB_TOKEN"];
             if (string.IsNullOrWhiteSpace(token))
             {
                 token = options.Token;

@@ -1,4 +1,5 @@
 using Azure.Data.Tables;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using ServerOps.Application.Abstractions;
 using ServerOps.Infrastructure.Configuration;
@@ -11,10 +12,10 @@ public sealed class AzureTableDomainSuffixRegistry : IDomainSuffixRegistry
     private readonly TableClient? _tableClient;
     private readonly string _fallbackSuffix;
 
-    public AzureTableDomainSuffixRegistry(IOptions<DomainOptions> domainOptions)
+    public AzureTableDomainSuffixRegistry(IOptions<DomainOptions> domainOptions, IConfiguration configuration)
     {
         _fallbackSuffix = domainOptions.Value.DefaultDomainSuffix?.Trim().ToLowerInvariant() ?? string.Empty;
-        var connectionString = Environment.GetEnvironmentVariable("STORAGE_CONNECTION_STRING");
+        var connectionString = configuration["STORAGE_CONNECTION_STRING"];
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             return;

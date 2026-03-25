@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Net.Http.Headers;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using ServerOps.Application.Abstractions;
 using ServerOps.Application.DTOs;
@@ -18,6 +19,7 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
     private readonly ICommandRunner _commandRunner;
     private readonly IEndpointService _endpointService;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly IConfiguration _configuration;
     private readonly IOptions<CloudflareOptions> _cloudflareOptions;
 
     public CloudflaredConfigService(
@@ -26,6 +28,7 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
         ICommandRunner commandRunner,
         IEndpointService endpointService,
         IHttpClientFactory httpClientFactory,
+        IConfiguration configuration,
         IOptions<CloudflareOptions> cloudflareOptions)
     {
         _cloudflaredService = cloudflaredService;
@@ -33,6 +36,7 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
         _commandRunner = commandRunner;
         _endpointService = endpointService;
         _httpClientFactory = httpClientFactory;
+        _configuration = configuration;
         _cloudflareOptions = cloudflareOptions;
     }
 
@@ -225,7 +229,7 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
 
     private string GetApiToken()
     {
-        var token = Environment.GetEnvironmentVariable("CLOUDFLARE_API_TOKEN");
+        var token = _configuration["CLOUDFLARE_API_TOKEN"];
         if (string.IsNullOrWhiteSpace(token))
         {
             token = _cloudflareOptions.Value.ApiToken;
@@ -241,7 +245,7 @@ public sealed class CloudflaredConfigService : ICloudflaredConfigService
 
     private string GetAccountId()
     {
-        var accountId = Environment.GetEnvironmentVariable("CLOUDFLARE_ACCOUNT_ID");
+        var accountId = _configuration["CLOUDFLARE_ACCOUNT_ID"];
         if (string.IsNullOrWhiteSpace(accountId))
         {
             accountId = _cloudflareOptions.Value.AccountId;

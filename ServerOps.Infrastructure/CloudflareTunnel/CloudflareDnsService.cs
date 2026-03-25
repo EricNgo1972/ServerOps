@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using ServerOps.Application.Abstractions;
 using ServerOps.Infrastructure.Configuration;
@@ -10,11 +11,13 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
 {
     private const string BaseUrl = "https://api.cloudflare.com/client/v4";
     private readonly HttpClient _httpClient;
+    private readonly IConfiguration _configuration;
     private readonly IOptions<CloudflareOptions> _options;
 
-    public CloudflareDnsService(HttpClient httpClient, IOptions<CloudflareOptions> options)
+    public CloudflareDnsService(HttpClient httpClient, IConfiguration configuration, IOptions<CloudflareOptions> options)
     {
         _httpClient = httpClient;
+        _configuration = configuration;
         _options = options;
     }
 
@@ -171,7 +174,7 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
 
     private string GetApiToken()
     {
-        var value = Environment.GetEnvironmentVariable("CLOUDFLARE_API_TOKEN");
+        var value = _configuration["CLOUDFLARE_API_TOKEN"];
         if (string.IsNullOrWhiteSpace(value))
         {
             value = _options.Value.ApiToken;
@@ -187,7 +190,7 @@ public sealed class CloudflareDnsService : ICloudflareDnsService
 
     private string GetZoneId()
     {
-        var value = Environment.GetEnvironmentVariable("CLOUDFLARE_ZONE_ID");
+        var value = _configuration["CLOUDFLARE_ZONE_ID"];
         if (string.IsNullOrWhiteSpace(value))
         {
             value = _options.Value.ZoneId;

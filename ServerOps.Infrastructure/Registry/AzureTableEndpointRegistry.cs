@@ -1,5 +1,6 @@
 using Azure;
 using Azure.Data.Tables;
+using Microsoft.Extensions.Configuration;
 using ServerOps.Application.Abstractions;
 using ServerOps.Application.Models;
 
@@ -12,9 +13,9 @@ public sealed class AzureTableEndpointRegistry : IEndpointRegistry
 
     private readonly TableClient? _tableClient;
 
-    public AzureTableEndpointRegistry()
+    public AzureTableEndpointRegistry(IConfiguration configuration)
     {
-        var connectionString = Environment.GetEnvironmentVariable("STORAGE_CONNECTION_STRING");
+        var connectionString = configuration["STORAGE_CONNECTION_STRING"];
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             return;

@@ -1,4 +1,5 @@
 using Azure.Data.Tables;
+using Microsoft.Extensions.Configuration;
 using ServerOps.Application.Abstractions;
 using ServerOps.Application.Models;
 
@@ -9,9 +10,9 @@ public sealed class AzureTableAppRegistry
     private const string TableName = "ManagedApps";
     private readonly TableClient? _tableClient;
 
-    public AzureTableAppRegistry()
+    public AzureTableAppRegistry(IConfiguration configuration)
     {
-        var connectionString = Environment.GetEnvironmentVariable("STORAGE_CONNECTION_STRING");
+        var connectionString = configuration["STORAGE_CONNECTION_STRING"];
         if (string.IsNullOrWhiteSpace(connectionString))
         {
             return;

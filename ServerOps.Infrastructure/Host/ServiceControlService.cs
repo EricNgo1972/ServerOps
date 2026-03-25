@@ -8,6 +8,8 @@ public sealed class ServiceControlService : IServiceControlService
 {
     private const int WindowsStopPollDelayMilliseconds = 500;
     private const int WindowsStopPollAttempts = 10;
+    private const int WindowsStartPollDelayMilliseconds = 1000;
+    private const int WindowsStartPollAttempts = 30;
 
     private readonly ICommandRunner _commandRunner;
     private readonly IRuntimeEnvironment _runtimeEnvironment;
@@ -26,19 +28,44 @@ public sealed class ServiceControlService : IServiceControlService
         var resolvedOperationId = ResolveOperationId(operationId);
         await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Start requested service={validatedName}", ct);
 
-        var result = _runtimeEnvironment.GetCurrentOs() == OsType.Windows
-            ? await _commandRunner.RunAsync(new CommandRequest
-            {
-                Command = "sc",
-                Arguments = ["start", validatedName]
-            }, ct)
-            : await _commandRunner.RunAsync(new CommandRequest
+        if (_runtimeEnvironment.GetCurrentOs() != OsType.Windows)
+        {
+            var linuxResult = await _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "systemctl",
                 Arguments = ["start", validatedName]
             }, ct);
-        await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Start {DescribeCommandResult(result)}", ct);
-        return WrapResult(result, resolvedOperationId);
+            await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Start {DescribeCommandResult(linuxResult)}", ct);
+            return WrapResult(linuxResult, resolvedOperationId);
+        }
+
+        var startResult = await _commandRunner.RunAsync(new CommandRequest
+        {
+            Command = "sc",
+            Arguments = ["start", validatedName]
+        }, ct);
+
+        if (!startResult.Succeeded)
+        {
+            await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Start {DescribeCommandResult(startResult)}", ct);
+            return WrapResult(startResult, resolvedOperationId);
+        }
+
+        var running = await WaitForRunning(validatedName, ct);
+        if (running)
+        {
+            await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Start {DescribeCommandResult(startResult)}", ct);
+            return WrapResult(startResult, resolvedOperationId);
+        }
+
+        var finalQuery = await QueryWindowsServiceAsync(validatedName, ct);
+        var failedResult = new CommandResult
+        {
+            ExitCode = 1053,
+            StdErr = $"Service did not reach RUNNING state after start. {GetQueryDetails(finalQuery)}"
+        };
+        await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Start {DescribeCommandResult(failedResult)}", ct);
+        return WrapResult(failedResult, resolvedOperationId);
     }
 
     public async Task<CommandResult> StopAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
@@ -47,19 +74,41 @@ public sealed class ServiceControlService : IServiceControlService
         var resolvedOperationId = ResolveOperationId(operationId);
         await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Stop requested service={validatedName}", ct);
 
-        var result = _runtimeEnvironment.GetCurrentOs() == OsType.Windows
-            ? await _commandRunner.RunAsync(new CommandRequest
-            {
-                Command = "sc",
-                Arguments = ["stop", validatedName]
-            }, ct)
-            : await _commandRunner.RunAsync(new CommandRequest
+        if (_runtimeEnvironment.GetCurrentOs() != OsType.Windows)
+        {
+            var linuxResult = await _commandRunner.RunAsync(new CommandRequest
             {
                 Command = "systemctl",
                 Arguments = ["stop", validatedName]
             }, ct);
-        await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Stop {DescribeCommandResult(result)}", ct);
-        return WrapResult(result, resolvedOperationId);
+            await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Stop {DescribeCommandResult(linuxResult)}", ct);
+            return WrapResult(linuxResult, resolvedOperationId);
+        }
+
+        var stopResult = await _commandRunner.RunAsync(new CommandRequest
+        {
+            Command = "sc",
+            Arguments = ["stop", validatedName]
+        }, ct);
+
+        if (stopResult.Succeeded || IsAlreadyStopped(stopResult))
+        {
+            var normalizedResult = stopResult.Succeeded
+                ? stopResult
+                : new CommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = string.IsNullOrWhiteSpace(stopResult.StdOut)
+                        ? "Service is already stopped."
+                        : $"{stopResult.StdOut}{Environment.NewLine}Service is already stopped."
+                };
+
+            await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Stop {DescribeCommandResult(normalizedResult)}", ct);
+            return WrapResult(normalizedResult, resolvedOperationId);
+        }
+
+        await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Stop {DescribeCommandResult(stopResult)}", ct);
+        return WrapResult(stopResult, resolvedOperationId);
     }
 
     public async Task<CommandResult> RestartAsync(string serviceName, string? operationId = null, CancellationToken ct = default)
@@ -85,7 +134,7 @@ public sealed class ServiceControlService : IServiceControlService
             Arguments = ["stop", validatedName]
         }, ct);
 
-        if (!stopResult.Succeeded)
+        if (!stopResult.Succeeded && !IsAlreadyStopped(stopResult))
         {
             await _operationLogger.LogAsync(resolvedOperationId, "ServiceControl", $"Restart stop {DescribeCommandResult(stopResult)}", ct);
             return WrapResult(stopResult, resolvedOperationId);
@@ -162,6 +211,45 @@ public sealed class ServiceControlService : IServiceControlService
         return false;
     }
 
+    private async Task<bool> WaitForRunning(string serviceName, CancellationToken ct)
+    {
+        for (var attempt = 0; attempt < WindowsStartPollAttempts; attempt++)
+        {
+            var queryResult = await QueryWindowsServiceAsync(serviceName, ct);
+            if (!queryResult.Succeeded)
+            {
+                return false;
+            }
+
+            var state = ParseWindowsState(queryResult.StdOut);
+            if (state == WindowsServiceQueryState.Running)
+            {
+                return true;
+            }
+
+            if (state == WindowsServiceQueryState.Stopped || state == WindowsServiceQueryState.Failed)
+            {
+                return false;
+            }
+
+            if (attempt < WindowsStartPollAttempts - 1)
+            {
+                await Task.Delay(WindowsStartPollDelayMilliseconds, ct);
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<CommandResult> QueryWindowsServiceAsync(string serviceName, CancellationToken ct)
+    {
+        return await _commandRunner.RunAsync(new CommandRequest
+        {
+            Command = "sc",
+            Arguments = ["query", serviceName]
+        }, ct);
+    }
+
     private static WindowsServiceQueryState ParseWindowsState(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
@@ -178,6 +266,16 @@ public sealed class ServiceControlService : IServiceControlService
         if (normalized.Contains("STOP_PENDING", StringComparison.Ordinal))
         {
             return WindowsServiceQueryState.StopPending;
+        }
+
+        if (normalized.Contains("RUNNING", StringComparison.Ordinal))
+        {
+            return WindowsServiceQueryState.Running;
+        }
+
+        if (normalized.Contains("START_PENDING", StringComparison.Ordinal))
+        {
+            return WindowsServiceQueryState.StartPending;
         }
 
         if (normalized.Contains("FAILED", StringComparison.Ordinal) ||
@@ -203,7 +301,23 @@ public sealed class ServiceControlService : IServiceControlService
     {
         Unknown = 0,
         StopPending = 1,
-        Stopped = 2,
-        Failed = 3
+        StartPending = 2,
+        Running = 3,
+        Stopped = 4,
+        Failed = 5
+    }
+
+    private static bool IsAlreadyStopped(CommandResult result)
+    {
+        var details = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+        return details.Contains("FAILED 1062", StringComparison.OrdinalIgnoreCase) ||
+               details.Contains("has not been started", StringComparison.OrdinalIgnoreCase) ||
+               details.Contains("not been started", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string GetQueryDetails(CommandResult queryResult)
+    {
+        var details = string.IsNullOrWhiteSpace(queryResult.StdErr) ? queryResult.StdOut : queryResult.StdErr;
+        return string.IsNullOrWhiteSpace(details) ? "Unable to query service state." : details.ReplaceLineEndings(" ").Trim();
     }
 }
