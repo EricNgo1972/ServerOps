@@ -1,5 +1,7 @@
 @using static Microsoft.AspNetCore.Components.Web.RenderMode
 @inherits LayoutComponentBase
+@inject IJSRuntime JS
+@inject NavigationManager NavigationManager
 
 <div class="app-shell">
     <aside class="sidebar">
@@ -10,12 +12,20 @@
 
         <nav class="nav-links">
             <NavLink href="/" Match="NavLinkMatch.All">Dashboard</NavLink>
-            <NavLink href="/releases">Releases</NavLink>
-            <NavLink href="/applications">Applications</NavLink>
-            <NavLink href="/exposure">Exposure</NavLink>
-            <NavLink href="/settings">Settings</NavLink>
-            <NavLink href="/deployments">Deployments</NavLink>
-            <NavLink href="/logs">Logs</NavLink>
+            <AuthorizeView>
+                <Authorized>
+                    <NavLink href="/releases">Releases</NavLink>
+                    <NavLink href="/applications">Applications</NavLink>
+                    <NavLink href="/exposure">Exposure</NavLink>
+                    <NavLink href="/settings">Settings</NavLink>
+                    <NavLink href="/deployments">Deployments</NavLink>
+                    <NavLink href="/logs">Logs</NavLink>
+                    <a href="" @onclick="LogoutAsync" @onclick:preventDefault="true">Logout</a>
+                </Authorized>
+                <NotAuthorized>
+                    <NavLink href="/login">Login</NavLink>
+                </NotAuthorized>
+            </AuthorizeView>
         </nav>
     </aside>
 
@@ -25,3 +35,11 @@
 </div>
 
 <LiveOperationLogDrawer @rendermode="InteractiveServer" />
+
+@code {
+    private async Task LogoutAsync()
+    {
+        await JS.InvokeVoidAsync("serverOpsPostJson", "/auth/logout", new { });
+        NavigationManager.NavigateTo("/", forceLoad: true);
+    }
+}

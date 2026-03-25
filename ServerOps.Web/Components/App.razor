@@ -8,7 +8,9 @@
     <HeadOutlet />
 </head>
 <body>
-    <Routes />
+    <CascadingAuthenticationState>
+        <Routes />
+    </CascadingAuthenticationState>
     <script>
         window.serverOpsDownloadTextFile = function (fileName, content) {
             const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
@@ -20,6 +22,25 @@
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
+        };
+        window.serverOpsPostJson = async function (url, payload) {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify(payload)
+            });
+
+            let message = "";
+            const contentType = response.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+                const data = await response.json();
+                message = data?.message || "";
+                return { success: response.ok, message };
+            }
+
+            message = await response.text();
+            return { success: response.ok, message: message || "" };
         };
     </script>
     <script src="_framework/blazor.web.js"></script>

@@ -120,6 +120,51 @@ h2 {
     color: var(--muted);
 }
 
+.login-page {
+    min-height: calc(100vh - 4rem);
+    align-content: center;
+}
+
+.login-card {
+    max-width: 440px;
+    margin: 0 auto;
+    display: grid;
+    gap: 1rem;
+}
+
+.login-form,
+.login-forgot-panel {
+    display: grid;
+    gap: 1rem;
+}
+
+.login-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    flex-wrap: wrap;
+}
+
+.login-link-button {
+    border: 0;
+    background: transparent;
+    color: #93c5fd;
+    padding: 0;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.login-link-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.login-forgot-panel {
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
 .card {
     background: var(--surface);
     border: 1px solid var(--border);

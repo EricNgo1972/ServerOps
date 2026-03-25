@@ -1,0 +1,195 @@
+@page "/login"
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@rendermode InteractiveServer
+@inject IJSRuntime JS
+@inject NavigationManager NavigationManager
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<PageTitle>Login</PageTitle>
+
+<div class="page-container login-page">
+    <section class="card login-card">
+        <div class="login-header">
+            <h1>Login</h1>
+            <p class="page-description">Authenticate to access ServerOps administration pages.</p>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_message))
+        {
+            <div class="message-area @(_isError ? "error" : "success")">
+                @_message
+            </div>
+        }
+
+        <EditForm Model="_login" OnValidSubmit="LoginAsync" class="login-form">
+            <div class="field">
+                <span>Email</span>
+                <InputText @bind-Value="_login.Email" />
+            </div>
+            <div class="field">
+                <span>Password</span>
+                <InputText @bind-Value="_login.Password" type="password" />
+            </div>
+            <div class="login-actions">
+                <button type="submit" class="btn btn-primary" disabled="@_isSubmitting">
+                    @if (_isSubmitting)
+                    {
+                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Signing in</span>
+                    }
+                    else
+                    {
+                        <span class="btn-content">Login</span>
+                    }
+                </button>
+                <button type="button" class="login-link-button" disabled="@_isSubmitting" @onclick="ToggleForgotPassword">
+                    Forgot password?
+                </button>
+            </div>
+        </EditForm>
+
+        @if (_showForgotPassword)
+        {
+            <div class="login-forgot-panel">
+                <div class="field">
+                    <span>Email</span>
+                    <InputText @bind-Value="_forgotPasswordEmail" />
+                </div>
+                <div class="login-actions">
+                    <button type="button" class="btn btn-secondary" disabled="@_isForgotPasswordSubmitting" @onclick="ForgotPasswordAsync">
+                        @if (_isForgotPasswordSubmitting)
+                        {
+                            <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Sending</span>
+                        }
+                        else
+                        {
+                            <span class="btn-content">Send reset link</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        }
+    </section>
+</div>
+
+@code {
+    private readonly LoginFormModel _login = new();
+    private string _forgotPasswordEmail = string.Empty;
+    private string _returnUrl = "/";
+    private string _message = string.Empty;
+    private bool _isError;
+    private bool _isSubmitting;
+    private bool _showForgotPassword;
+    private bool _isForgotPasswordSubmitting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+        if (authState.User.Identity?.IsAuthenticated == true)
+        {
+            NavigationManager.NavigateTo("/");
+            return;
+        }
+
+        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        if (Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query).TryGetValue("returnUrl", out var returnUrl))
+        {
+            _returnUrl = string.IsNullOrWhiteSpace(returnUrl) ? "/" : returnUrl.ToString();
+        }
+    }
+
+    private async Task LoginAsync()
+    {
+        _message = string.Empty;
+        _isError = false;
+        _isSubmitting = true;
+
+        try
+        {
+            var response = await JS.InvokeAsync<AuthClientResult>("serverOpsPostJson", "/auth/login", new
+            {
+                email = _login.Email,
+                password = _login.Password
+            });
+
+            if (!response.Success)
+            {
+                _message = string.IsNullOrWhiteSpace(response.Message) ? "Login failed." : response.Message;
+                _isError = true;
+                return;
+            }
+
+            NavigationManager.NavigateTo(NormalizeReturnUrl(_returnUrl), forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            _message = string.IsNullOrWhiteSpace(ex.Message) ? "Login failed." : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isSubmitting = false;
+        }
+    }
+
+    private void ToggleForgotPassword()
+    {
+        _showForgotPassword = !_showForgotPassword;
+        if (_showForgotPassword && string.IsNullOrWhiteSpace(_forgotPasswordEmail))
+        {
+            _forgotPasswordEmail = _login.Email;
+        }
+    }
+
+    private async Task ForgotPasswordAsync()
+    {
+        _message = string.Empty;
+        _isError = false;
+        _isForgotPasswordSubmitting = true;
+
+        try
+        {
+            var response = await JS.InvokeAsync<AuthClientResult>("serverOpsPostJson", "/auth/forgot-password", new
+            {
+                email = _forgotPasswordEmail
+            });
+
+            _message = string.IsNullOrWhiteSpace(response.Message)
+                ? "If the account exists, password reset instructions have been sent."
+                : response.Message;
+            _isError = !response.Success;
+        }
+        catch (Exception ex)
+        {
+            _message = string.IsNullOrWhiteSpace(ex.Message)
+                ? "Unable to submit forgot password request."
+                : ex.Message;
+            _isError = true;
+        }
+        finally
+        {
+            _isForgotPasswordSubmitting = false;
+        }
+    }
+
+    private static string NormalizeReturnUrl(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "/";
+        }
+
+        return value.StartsWith('/') ? value : "/";
+    }
+
+    private sealed class LoginFormModel
+    {
+        public string Email { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }
+
+    private sealed class AuthClientResult
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+    }
+}
