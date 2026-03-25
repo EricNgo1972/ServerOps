@@ -30,6 +30,10 @@
         </div>
     }
 
+    <div class="message-area info">
+        ⏳ DNS changes may take a few minutes to propagate after exposing or un-exposing a domain.
+    </div>
+
     <section class="card exposure-shell">
         @if (_tunnelLoaded)
         {
@@ -153,19 +157,19 @@
 
                     <div class="exposure-tunnel-metrics">
                         <div class="exposure-tunnel-item">
-                            <span class="runtime-label">Binary</span>
+                            <span class="runtime-label">1. 📦 Binary</span>
                             <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsInstalled == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsInstalled == true)</span>
                         </div>
                         <div class="exposure-tunnel-item">
-                            <span class="runtime-label">Configured</span>
+                            <span class="runtime-label">2. ⚙️ Configured</span>
                             <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsConfigured == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsConfigured == true)</span>
                         </div>
                         <div class="exposure-tunnel-item">
-                            <span class="runtime-label">Service</span>
+                            <span class="runtime-label">3. 🪟 Service</span>
                             <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsServiceInstalled == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsServiceInstalled == true)</span>
                         </div>
                         <div class="exposure-tunnel-item">
-                            <span class="runtime-label">Running</span>
+                            <span class="runtime-label">4. ▶️ Running</span>
                             <span class="app-badge @GetTunnelBadgeClass(_tunnelInfo?.IsRunning == true)">@GetTunnelStatusLabel(_tunnelInfo?.IsRunning == true)</span>
                         </div>
                     </div>
@@ -199,7 +203,7 @@
 
                 @foreach (var app in _apps)
                 {
-                    var rowId = GetRowId(app);
+                    var rowId = GetActionRowId(app);
                     var normalizedServiceName = NormalizeServiceName(app.ServiceName);
                     var endpoint = _endpointLookup.TryGetValue(normalizedServiceName, out var existingEndpoint)
                         ? existingEndpoint
@@ -211,12 +215,13 @@
                     var isProcessing = string.Equals(_processingAppId, rowId, StringComparison.Ordinal);
                     var effectiveHostname = string.IsNullOrWhiteSpace(mapping?.Hostname) ? endpoint?.Hostname : mapping!.Hostname;
                     var isExposed = !string.IsNullOrWhiteSpace(effectiveHostname);
+                    var hasDuplicateHostname = HasDuplicateHostname(app, endpoint);
                     
                     var tunnelReady = _tunnelInfo?.IsConfigured == true && _tunnelInfo.IsRunning;
 
-                    var isDisable = isProcessing || _isTunnelActionRunning || !tunnelReady || !CanExpose(app);
+                    var isDisable = isProcessing || _isTunnelActionRunning || !tunnelReady || !CanExpose(app) || hasDuplicateHostname;
 
-                    <div class="exposure-grid exposure-row">
+                    <div @key="app.ServiceName" class="exposure-grid exposure-row">
                         <div class="exposure-app">
                             <div class="exposure-app-name">@GetAppName(app)</div>
                             <div class="exposure-app-meta">@app.ServiceName</div>
@@ -226,11 +231,11 @@
                             <div class="exposure-domain-composer">
                                 <input class="exposure-domain-input"
                                        value="@domainLabel"
-                                       disabled="@isProcessing"
+                                       disabled="@isExposed"
                                        @oninput="args => OnDomainLabelChanged(app, args.Value?.ToString())" />
                                 <select class="exposure-domain-select"
                                         value="@domainSuffix"
-                                        disabled="@isProcessing || _domainSuffixes.Count == 0"
+                                        disabled="@isProcessing || isExposed || _domainSuffixes.Count == 0"
                                         @onchange="args => OnDomainSuffixChanged(app, args.Value?.ToString())">
                                     <option value="">Select suffix</option>
                                     @foreach (var suffix in _domainSuffixes)
@@ -254,6 +259,10 @@
                                     <span>-</span>
                                 }
                             </div>
+                            @if (hasDuplicateHostname)
+                            {
+                                <div class="hostname-warning">This hostname is already assigned to another app.</div>
+                            }
                         </div>
                         <div>
                             <span class="app-badge @(isExposed ? "running" : "stopped")">
@@ -264,29 +273,16 @@
                             @if (isExposed)
                             {
                                 <button type="button"
-                                        class="btn btn-secondary"
-                                        disabled="@isProcessing || _isTunnelActionRunning || !tunnelReady || !CanUpdate(app, endpoint)"
-                                        @onclick="() => UpdateExposureAsync(app)">
-                                    @if (IsAppActionActive(app, "Update exposure"))
-                                    {
-                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Updating</span>
-                                    }
-                                    else
-                                    {
-                                        <span class="btn-content">Update</span>
-                                    }
-                                </button>
-                                <button type="button"
                                         class="btn btn-danger"
-                                        disabled="@isProcessing || _isTunnelActionRunning"
+                                        disabled="@isProcessing"
                                         @onclick="() => RemoveExposureAsync(app)">
-                                    @if (IsAppActionActive(app, "Remove exposure"))
+                                    @if (IsAppActionActive(app, "Un-expose"))
                                     {
-                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Removing</span>
+                                        <span class="btn-content"><span class="btn-spinner" aria-hidden="true"></span>Un-exposing</span>
                                     }
                                     else
                                     {
-                                        <span class="btn-content">Remove</span>
+                                        <span class="btn-content">Un-expose</span>
                                     }
                                 </button>
                             }
@@ -404,12 +400,31 @@
                 };
             }
 
-            _draftDomainLabels.Clear();
-            _selectedDomainSuffixes.Clear();
+            var activeServices = _apps
+                .Select(app => app.ServiceName)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var staleServiceName in _draftDomainLabels.Keys.Where(key => !activeServices.Contains(key)).ToList())
+            {
+                _draftDomainLabels.Remove(staleServiceName);
+            }
+
+            foreach (var staleServiceName in _selectedDomainSuffixes.Keys.Where(key => !activeServices.Contains(key)).ToList())
+            {
+                _selectedDomainSuffixes.Remove(staleServiceName);
+            }
+
             foreach (var app in _apps)
             {
-                _draftDomainLabels[app.ServiceName] = GetInitialDomainLabel(app);
-                _selectedDomainSuffixes[app.ServiceName] = GetInitialDomainSuffix(app);
+                if (!_draftDomainLabels.ContainsKey(app.ServiceName))
+                {
+                    _draftDomainLabels[app.ServiceName] = GetInitialDomainLabel(app);
+                }
+
+                if (!_selectedDomainSuffixes.ContainsKey(app.ServiceName))
+                {
+                    _selectedDomainSuffixes[app.ServiceName] = GetInitialDomainSuffix(app);
+                }
             }
 
             LogExposureDiagnostics();
@@ -548,19 +563,14 @@
         await ExecuteExposureActionAsync(app, "Expose", operationId => ExposureService.ExposeAsync(app.ServiceName, BuildHostnameForApp(app, null), operationId));
     }
 
-    private async Task UpdateExposureAsync(AppInstance app)
-    {
-        await ExecuteExposureActionAsync(app, "Update exposure", operationId => ExposureService.UpdateAsync(app.ServiceName, BuildHostnameForApp(app, _endpointLookup[app.ServiceName]), operationId));
-    }
-
     private async Task RemoveExposureAsync(AppInstance app)
     {
-        await ExecuteExposureActionAsync(app, "Remove exposure", operationId => ExposureService.UnexposeAsync(app.ServiceName, operationId));
+        await ExecuteExposureActionAsync(app, "Un-expose", operationId => ExposureService.UnexposeAsync(app.ServiceName, operationId));
     }
 
     private async Task ExecuteExposureActionAsync(AppInstance app, string actionTitle, Func<string, Task> action)
     {
-        var rowId = GetRowId(app);
+        var rowId = GetActionRowId(app);
         if (string.Equals(_processingAppId, rowId, StringComparison.Ordinal))
         {
             return;
@@ -599,7 +609,7 @@
         string.Equals(_activeTunnelAction, actionTitle, StringComparison.Ordinal);
 
     private bool IsAppActionActive(AppInstance app, string actionTitle) =>
-        string.Equals(_processingAppId, GetRowId(app), StringComparison.Ordinal) &&
+        string.Equals(_processingAppId, GetActionRowId(app), StringComparison.Ordinal) &&
         string.Equals(_activeAppAction, actionTitle, StringComparison.Ordinal);
 
     private bool CanExpose(AppInstance app)
@@ -607,11 +617,18 @@
         return !string.IsNullOrWhiteSpace(BuildHostnameForApp(app, null));
     }
 
-    private bool CanUpdate(AppInstance app, ServiceEndpoint? endpoint)
+    private bool HasDuplicateHostname(AppInstance app, ServiceEndpoint? endpoint)
     {
-        var domain = BuildHostnameForApp(app, endpoint);
-        return !string.IsNullOrWhiteSpace(domain) &&
-               !string.Equals(domain, endpoint?.Hostname, StringComparison.OrdinalIgnoreCase);
+        var hostname = BuildHostnameForApp(app, endpoint);
+        if (string.IsNullOrWhiteSpace(hostname))
+        {
+            return false;
+        }
+
+        return _endpointLookup.Values.Any(item =>
+            !string.Equals(item.ServiceName, app.ServiceName, StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(item.Hostname) &&
+            string.Equals(item.Hostname, hostname, StringComparison.OrdinalIgnoreCase));
     }
 
     private string GetInitialDomainLabel(AppInstance app)
@@ -638,10 +655,9 @@
 
     private string GetDraftDomainLabel(AppInstance app, ServiceEndpoint? endpoint)
     {
-        if (_draftDomainLabels.TryGetValue(app.ServiceName, out var draft) &&
-            !string.IsNullOrWhiteSpace(draft))
+        if (_draftDomainLabels.TryGetValue(app.ServiceName, out var draft))
         {
-            return draft;
+            return draft ?? string.Empty;
         }
 
         if (TrySplitHostname(endpoint?.Hostname, out var label, out _))
@@ -709,8 +725,10 @@
         return !string.IsNullOrWhiteSpace(label);
     }
 
-    private static string GetRowId(AppInstance app) =>
+    private static string GetDisplayRowId(AppInstance app) =>
         string.IsNullOrWhiteSpace(app.Id) ? app.ServiceName : app.Id;
+
+    private static string GetActionRowId(AppInstance app) => app.ServiceName;
 
     private static string GetAppName(AppInstance app) =>
         string.IsNullOrWhiteSpace(app.DisplayName) ? app.ServiceName : app.DisplayName;
@@ -750,21 +768,8 @@
 
         return _mappings
             .Where(mapping => !string.IsNullOrWhiteSpace(mapping.ServiceName))
-            .OrderByDescending(mapping => NormalizeServiceName(mapping.ServiceName).Length)
-            .FirstOrDefault(mapping => NamesMatch(normalizedServiceName, NormalizeServiceName(mapping.ServiceName)));
-    }
-
-    private static bool NamesMatch(string left, string right)
-    {
-        if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return left.StartsWith(right + "-", StringComparison.OrdinalIgnoreCase) ||
-               left.StartsWith(right + ".", StringComparison.OrdinalIgnoreCase) ||
-               right.StartsWith(left + "-", StringComparison.OrdinalIgnoreCase) ||
-               right.StartsWith(left + ".", StringComparison.OrdinalIgnoreCase);
+            .FirstOrDefault(mapping =>
+                string.Equals(normalizedServiceName, NormalizeServiceName(mapping.ServiceName), StringComparison.OrdinalIgnoreCase));
     }
 
     private void LogExposureDiagnostics()

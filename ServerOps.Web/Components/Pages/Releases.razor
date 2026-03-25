@@ -9,6 +9,7 @@
 @inject IGitHubService GitHubService
 @inject IOneClickDeployService OneClickDeployService
 @inject IDomainNameBuilder DomainNameBuilder
+@inject NavigationManager NavigationManager
 @inject ServerOps.Web.Services.LiveOperationLogState LiveOperationLogState
 
 <PageTitle>Releases</PageTitle>
@@ -116,10 +117,24 @@
                     <dd>@(_selectedApp is null ? "-" : string.IsNullOrWhiteSpace(_selectedApp.DisplayName) ? _selectedApp.Name : _selectedApp.DisplayName)</dd>
                 </div>
                 <div>
+                    <dt>Instance</dt>
+                    <dd>@(EffectiveInstanceName ?? "-")</dd>
+                </div>
+                <div>
                     <dt>Asset</dt>
                     <dd>@(_selectedAsset?.Name ?? "-")</dd>
                 </div>
             </dl>
+
+            <label class="field">
+                <span>Instance suffix</span>
+                <input value="@_instanceSuffix" @oninput="OnInstanceSuffixChanged" />
+            </label>
+
+            @if (HasInstanceSuffix && !IsInstanceSuffixValid)
+            {
+                <div class="hostname-warning">Enter an instance suffix using letters, numbers, dot, dash, or underscore.</div>
+            }
 
             <label class="field">
                 <span>Port override</span>
@@ -129,6 +144,18 @@
             @if (!IsPortOverrideValid)
             {
                 <div class="hostname-warning">Enter a port between 1 and 65535.</div>
+            }
+            else if (IsServerOpsPortSelected)
+            {
+                <div class="hostname-warning">Port @PortOverride is already used by ServerOps.</div>
+            }
+            else if (HasInstanceSuffix && !PortOverride.HasValue)
+            {
+                <div class="hostname-warning">Enter a unique port override for this instance.</div>
+            }
+            else if (IsPortAlreadyUsed)
+            {
+                <div class="hostname-warning">Port @PortOverride is already used by @(PortConflictServiceName ?? "another service").</div>
             }
 
             <label class="toggle">
@@ -203,10 +230,12 @@
     private bool _isDeploying;
     private bool _exposePublicly;
     private string _portOverrideText = string.Empty;
+    private string _instanceSuffix = string.Empty;
     private IReadOnlyList<string> _domainSuffixes = Array.Empty<string>();
     private string _selectedDomainSuffix = string.Empty;
     private string _hostLabel = string.Empty;
     private HashSet<string> _existingHostnames = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<int, string> _usedPorts = new();
     private string _errorMessage = string.Empty;
     private OneClickDeployResult? _deployResult;
 
@@ -220,17 +249,35 @@
 
         _domainSuffixes = await DomainSuffixRegistry.GetSuffixesAsync();
         _selectedDomainSuffix = _domainSuffixes.FirstOrDefault() ?? string.Empty;
-        _existingHostnames = (await EndpointService.GetEndpointsAsync())
-            .Where(endpoint => !string.IsNullOrWhiteSpace(endpoint.Hostname))
-            .Select(endpoint => endpoint.Hostname!.Trim().ToLowerInvariant())
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        await RefreshEndpointStateAsync();
     }
 
     private bool CanDeploy =>
         _selectedApp is not null &&
         _selectedAsset is not null &&
+        IsInstanceSuffixAccepted &&
+        (!HasInstanceSuffix || PortOverride.HasValue) &&
         IsPortOverrideValid &&
+        !IsServerOpsPortSelected &&
+        !IsPortAlreadyUsed &&
         (!_exposePublicly || (IsHostnameValid && !IsDuplicateHostname));
+
+    private bool IsInstanceSuffixValid =>
+        string.IsNullOrWhiteSpace(_instanceSuffix) ||
+        _instanceSuffix.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.');
+
+    private bool HasInstanceSuffix => !string.IsNullOrWhiteSpace(_instanceSuffix);
+
+    private bool IsInstanceSuffixAccepted => !HasInstanceSuffix || IsInstanceSuffixValid;
+
+    private string NormalizedInstanceSuffix => _instanceSuffix.Trim();
+
+    private string? EffectiveInstanceName =>
+        _selectedApp is null || !IsInstanceSuffixAccepted
+            ? null
+            : HasInstanceSuffix
+                ? $"{_selectedApp.Name}-{NormalizedInstanceSuffix}"
+                : _selectedApp.Name;
 
     private string SanitizedHostLabel => DomainNameBuilder.SanitizeLabel(_hostLabel);
 
@@ -252,6 +299,21 @@
         string.IsNullOrWhiteSpace(_portOverrideText) ||
         PortOverride.HasValue;
 
+    private bool IsPortAlreadyUsed =>
+        PortOverride is int selectedPort &&
+        _usedPorts.TryGetValue(selectedPort, out var serviceName) &&
+        !string.Equals(serviceName, EffectiveInstanceName, StringComparison.OrdinalIgnoreCase);
+
+    private bool IsServerOpsPortSelected =>
+        PortOverride is int selectedPort &&
+        GetServerOpsPort() is int serverOpsPort &&
+        selectedPort == serverOpsPort;
+
+    private string? PortConflictServiceName =>
+        PortOverride is int selectedPort && _usedPorts.TryGetValue(selectedPort, out var serviceName)
+            ? serviceName
+            : null;
+
     private string CurrentOsLabel =>
         _currentOs == ServerOps.Domain.Enums.OsType.Windows ? "Windows" : "Linux";
 
@@ -269,11 +331,13 @@
 
         if (_selectedApp is null)
         {
+            _instanceSuffix = string.Empty;
             _hostLabel = string.Empty;
             return;
         }
 
-        _hostLabel = DomainNameBuilder.SanitizeLabel(_selectedApp.Name);
+        _instanceSuffix = string.Empty;
+        _hostLabel = string.Empty;
 
         var repo = ExtractRepo(_selectedApp.RepoUrl);
         if (string.IsNullOrWhiteSpace(repo))
@@ -323,6 +387,11 @@
         _hostLabel = args.Value?.ToString() ?? string.Empty;
     }
 
+    private void OnInstanceSuffixChanged(ChangeEventArgs args)
+    {
+        _instanceSuffix = args.Value?.ToString()?.Trim() ?? string.Empty;
+    }
+
     private void OnDomainSuffixChanged(ChangeEventArgs args)
     {
         _selectedDomainSuffix = args.Value?.ToString() ?? string.Empty;
@@ -340,6 +409,30 @@
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(EffectiveInstanceName))
+        {
+            _errorMessage = "Unable to determine the deployment target.";
+            return;
+        }
+
+        if (HasInstanceSuffix && !PortOverride.HasValue)
+        {
+            _errorMessage = "A unique port override is required for each named instance.";
+            return;
+        }
+
+        if (IsServerOpsPortSelected)
+        {
+            _errorMessage = $"Port {PortOverride} is already used by ServerOps.";
+            return;
+        }
+
+        if (IsPortAlreadyUsed)
+        {
+            _errorMessage = $"Port {PortOverride} is already used by {PortConflictServiceName ?? "another service"}.";
+            return;
+        }
+
         var repo = ExtractRepo(_selectedApp.RepoUrl);
         if (string.IsNullOrWhiteSpace(repo))
         {
@@ -354,18 +447,24 @@
         try
         {
             var operationId = Guid.NewGuid().ToString("N");
-            LiveOperationLogState.Open(operationId, $"Deploy {_selectedApp.Name}");
+            LiveOperationLogState.Open(operationId, $"Deploy {EffectiveInstanceName}");
             _deployResult = await OneClickDeployService.DeployAsync(new OneClickDeployRequest
             {
                 OperationId = operationId,
                 Repo = repo,
                 AppName = _selectedApp.Name,
+                InstanceName = EffectiveInstanceName,
                 AssetUrl = _selectedAsset.DownloadUrl,
                 PortOverride = PortOverride,
                 AutoGenerateHostname = false,
                 DomainSuffix = _exposePublicly ? _selectedDomainSuffix : null,
                 Hostname = _exposePublicly ? SelectedHostname : null
             });
+
+            if (_deployResult.Deployment.Status == ServerOps.Domain.Enums.DeploymentStatus.Succeeded)
+            {
+                NavigationManager.NavigateTo("/applications", forceLoad: true);
+            }
         }
         catch (Exception ex)
         {
@@ -375,6 +474,26 @@
         {
             _isDeploying = false;
         }
+    }
+
+    private async Task RefreshEndpointStateAsync()
+    {
+        var endpoints = await EndpointService.GetEndpointsAsync();
+        _existingHostnames = endpoints
+            .Where(endpoint => !string.IsNullOrWhiteSpace(endpoint.Hostname))
+            .Select(endpoint => endpoint.Hostname!.Trim().ToLowerInvariant())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _usedPorts = endpoints
+            .Where(endpoint => endpoint.Port is > 0 && !string.IsNullOrWhiteSpace(endpoint.ServiceName))
+            .GroupBy(endpoint => endpoint.Port!.Value)
+            .ToDictionary(group => group.Key, group => group.First().ServiceName);
+    }
+
+    private int? GetServerOpsPort()
+    {
+        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        return uri.IsDefaultPort ? null : uri.Port;
     }
 
     private static string ExtractRepo(string? repoUrl)

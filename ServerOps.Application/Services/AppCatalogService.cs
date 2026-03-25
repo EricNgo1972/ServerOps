@@ -52,7 +52,7 @@ public sealed class AppCatalogService : IAppCatalogService
         }
 
         var ports = await _portService.GetListeningPortsAsync(cancellationToken);
-        var matchedPorts = MatchPorts(service.Name, ports).ToList();
+        var matchedPorts = MatchPorts(service, ports).ToList();
         var tunnelInfo = await _cloudflaredService.GetTunnelInfoAsync(cancellationToken);
 
         return new AppDetailsDto
@@ -66,7 +66,7 @@ public sealed class AppCatalogService : IAppCatalogService
     private AppInstance MapToAppInstance(ServiceInfo service, IReadOnlyList<CompanyApp> apps, IReadOnlyList<PortInfo> ports)
     {
         var app = FindApp(service.Name, apps);
-        var servicePorts = MatchPorts(service.Name, ports).Select(x => x.Port).Distinct().Order().ToList();
+        var servicePorts = MatchPorts(service, ports).Select(x => x.Port).Distinct().Order().ToList();
         var primaryPort = servicePorts.FirstOrDefault();
 
         return new AppInstance
@@ -103,8 +103,14 @@ public sealed class AppCatalogService : IAppCatalogService
             });
     }
 
-    private static IEnumerable<PortInfo> MatchPorts(string serviceName, IReadOnlyList<PortInfo> ports)
+    private static IEnumerable<PortInfo> MatchPorts(ServiceInfo service, IReadOnlyList<PortInfo> ports)
     {
+        if (service.ProcessId is int pid)
+        {
+            return ports.Where(port => port.ProcessId == pid);
+        }
+
+        var serviceName = service.Name;
         return ports.Where(port =>
             !string.IsNullOrWhiteSpace(port.ProcessName) &&
             (port.ProcessName.Contains(serviceName, StringComparison.OrdinalIgnoreCase) ||

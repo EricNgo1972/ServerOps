@@ -29,10 +29,18 @@ public sealed class OneClickDeployService : IOneClickDeployService
         var operationId = string.IsNullOrWhiteSpace(request.OperationId)
             ? Guid.NewGuid().ToString("N")
             : request.OperationId.Trim();
+        var deploymentTarget = string.IsNullOrWhiteSpace(request.InstanceName)
+            ? request.AppName?.Trim() ?? string.Empty
+            : request.InstanceName.Trim();
 
         if (string.IsNullOrWhiteSpace(request.AppName))
         {
             return CreateFailureResult(operationId, "Application name is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(deploymentTarget))
+        {
+            return CreateFailureResult(operationId, "Instance name is required.");
         }
 
         if (string.IsNullOrWhiteSpace(request.AssetUrl))
@@ -55,7 +63,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
 
             try
             {
-                hostname = _domainNameBuilder.Build(request.AppName, request.DomainSuffix);
+                hostname = _domainNameBuilder.Build(deploymentTarget, request.DomainSuffix);
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {
@@ -67,7 +75,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
             hostname = null;
         }
 
-        var deployment = await _deploymentService.DeployAsync(request.AppName, request.AssetUrl, request.PortOverride, operationId, ct);
+        var deployment = await _deploymentService.DeployAsync(deploymentTarget, request.AssetUrl, request.PortOverride, operationId, ct);
         await _operationLogger.LogAsync(operationId, "Deployment", deployment.Status.ToString(), ct);
         if (deployment.Status != DeploymentStatus.Succeeded)
         {
@@ -95,7 +103,7 @@ public sealed class OneClickDeployService : IOneClickDeployService
 
         try
         {
-            await _exposureService.ExposeAsync(request.AppName, hostname, operationId, ct);
+            await _exposureService.ExposeAsync(deploymentTarget, hostname, operationId, ct);
             await _operationLogger.LogAsync(operationId, "Exposure", "Succeeded", ct);
 
             return new OneClickDeployResult
