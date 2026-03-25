@@ -16,8 +16,6 @@ permissions:
 jobs:
   package:
     runs-on: ubuntu-latest
-    env:
-      BUILD_ROOT: ${{ runner.temp }}/serverops-release
 
     steps:
       - name: Checkout
@@ -32,18 +30,25 @@ jobs:
         run: dotnet restore ServerOps.Web/ServerOps.Web.csproj
 
       - name: Publish Windows package
+        env:
+          BUILD_ROOT: ${{ github.workspace }}/.tmp/serverops-release
         run: dotnet publish ServerOps.Web/ServerOps.Web.csproj -c Release -r win-x64 --self-contained false -o "$BUILD_ROOT/win-x64"
 
       - name: Publish Linux package
+        env:
+          BUILD_ROOT: ${{ github.workspace }}/.tmp/serverops-release
         run: dotnet publish ServerOps.Web/ServerOps.Web.csproj -c Release -r linux-x64 --self-contained false -o "$BUILD_ROOT/linux-x64"
 
       - name: Include bootstrap files
+        env:
+          BUILD_ROOT: ${{ github.workspace }}/.tmp/serverops-release
         run: |
           cp install-windows-service.ps1 "$BUILD_ROOT/win-x64/"
           cp install.sh serverops.service "$BUILD_ROOT/linux-x64/"
 
       - name: Create zip packages
         env:
+          BUILD_ROOT: ${{ github.workspace }}/.tmp/serverops-release
           RELEASE_TAG: ${{ github.event.inputs.release_tag }}
         run: |
           mkdir -p "$BUILD_ROOT/release"
@@ -52,6 +57,7 @@ jobs:
 
       - name: Create GitHub release
         env:
+          BUILD_ROOT: ${{ github.workspace }}/.tmp/serverops-release
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.release_tag }}
           RELEASE_NAME: ${{ github.event.inputs.release_name }}
@@ -66,4 +72,6 @@ jobs:
 
       - name: Cleanup temporary build files
         if: always()
+        env:
+          BUILD_ROOT: ${{ github.workspace }}/.tmp/serverops-release
         run: rm -rf "$BUILD_ROOT"
