@@ -5,6 +5,12 @@ using ServerOps.Web.Api;
 using ServerOps.Infrastructure.Configuration;
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Host.UseWindowsService(options =>
+{
+    options.ServiceName = "ServerOps";
+});
+builder.Host.UseSystemd();
+
 builder.Configuration.Sources.Add(new AzureTableConfigurationSource());
 
 builder.Services.Configure<AuthServerOptions>(builder.Configuration.GetSection("AuthServer"));

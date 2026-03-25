@@ -130,9 +130,11 @@ The API triggers the one-click deploy flow:
 Linux bootstrap assets are included at the repository root:
 
 - [`install.sh`](/mnt/c/SPC/spc-setup/install.sh)
+- [`install-windows-service.ps1`](/mnt/c/spc/spc-setup/install-windows-service.ps1)
 - [`serverops.service`](/mnt/c/SPC/spc-setup/serverops.service)
 
 The Linux systemd service is intended to run ServerOps itself as `root`.
+The Windows bootstrap script installs ServerOps itself as a Windows service.
 
 ## Documentation
 
