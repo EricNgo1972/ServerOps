@@ -13,7 +13,7 @@ public sealed class LoopbackBypassMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!(context.User.Identity?.IsAuthenticated ?? false) && IsLoopback(context))
+        if (!(context.User.Identity?.IsAuthenticated ?? false) && IsLocalhostRequest(context))
         {
             var claims = new[]
             {
@@ -29,9 +29,17 @@ public sealed class LoopbackBypassMiddleware
         await _next(context);
     }
 
-    private static bool IsLoopback(HttpContext context)
+    private static bool IsLocalhostRequest(HttpContext context)
     {
-        var remoteIp = context.Connection.RemoteIpAddress;
-        return remoteIp is not null && System.Net.IPAddress.IsLoopback(remoteIp);
+        var host = context.Request.Host.Host?.Trim();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            return false;
+        }
+
+        return string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(host, "127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(host, "::1", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(host, "[::1]", StringComparison.OrdinalIgnoreCase);
     }
 }
